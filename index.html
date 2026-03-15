@@ -576,6 +576,64 @@
     }
     .toast.show { display: flex; animation: toast-in 0.28s ease; }
 
+    /* ── Install Banner ── */
+    .install-banner {
+      position: fixed;
+      bottom: calc(var(--sab) + 76px);
+      left: 50%; transform: translateX(-50%);
+      width: calc(100% - 2rem); max-width: 440px;
+      background: var(--surface);
+      border: 1px solid rgba(212,175,55,0.3);
+      border-radius: var(--radius);
+      padding: 0.9rem 1rem;
+      z-index: 4500;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+      display: none;
+      flex-direction: column;
+      gap: 0.5rem;
+      animation: toast-in 0.32s ease;
+    }
+    .install-banner.show { display: flex; }
+    .install-close {
+      position: absolute; top: 0.6rem; right: 0.75rem;
+      background: none; border: none; color: var(--text-dim);
+      font-size: 1rem; cursor: pointer; padding: 0.2rem;
+      line-height: 1;
+    }
+    .install-title {
+      font-size: 0.88rem; font-weight: 500; color: var(--text);
+      letter-spacing: 0.01em;
+    }
+    .install-sub {
+      font-size: 0.74rem; color: var(--text-dim); margin-top: 0.1rem;
+    }
+    .btn-install-now {
+      background: var(--gold); color: #0a0a0a;
+      border: none; border-radius: 8px;
+      padding: 0.45rem 1rem; font-size: 0.8rem; font-weight: 600;
+      letter-spacing: 0.06em; cursor: pointer; flex-shrink: 0;
+      -webkit-appearance: none; min-height: 36px;
+    }
+    .btn-install-now:active { opacity: 0.8; }
+    /* iOS step-by-step */
+    .ios-steps {
+      display: flex; flex-direction: column; gap: 0.35rem;
+      padding: 0.55rem 0.7rem;
+      background: var(--surface2); border-radius: var(--radius-sm);
+    }
+    .ios-step {
+      font-size: 0.78rem; color: var(--text-dim); display: flex;
+      align-items: center; gap: 0.5rem;
+    }
+    .ios-step strong { color: var(--text); }
+    .ios-step-num {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: rgba(212,175,55,0.15); border: 1px solid rgba(212,175,55,0.3);
+      color: var(--gold); font-size: 0.7rem; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+
     /* Invite box */
     .invite-box {
       background: var(--gold-soft); border: 1px solid var(--border);
@@ -1344,9 +1402,10 @@
   </div>
 
   <div class="config-notice">
-    ⚙️ Forged & Curated with passion and care by <code>Psyberly Labs</code> . Under the vision of <code> | Iconic_abdallah</code>
+    ⚙️ Forged & Curated with passion and care by <code>Psyberly Labs</code> . Under the vision of <code> |Iconic_abdallah</code>
 </div>
 </div>
+
 <!-- ═══ SETUP ═══ -->
 <div id="setup-screen" class="screen">
   <h2>one more thing ✦</h2>
@@ -1568,6 +1627,18 @@
 <div class="modal-overlay" id="settings-modal">
   <div class="modal">
     <h3>Settings</h3>
+    <button class="delete-opt" id="notif-settings-btn" onclick="handleNotifSettingsBtn()">
+      <span class="do-icon">🔔</span>
+      <span class="do-label">Enable notifications
+        <span class="do-sub" id="notif-settings-sub">Tap to allow push notifications</span>
+      </span>
+    </button>
+    <button class="delete-opt" id="install-settings-btn" onclick="handleInstallSettingsBtn()">
+      <span class="do-icon">📲</span>
+      <span class="do-label">Add to Home Screen
+        <span class="do-sub">Install app for best experience</span>
+      </span>
+    </button>
     <button class="delete-opt" onclick="closeModal('settings-modal'); showAbout()">
       <span class="do-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></span>
       <span class="do-label">About Our Space</span>
@@ -1577,6 +1648,53 @@
       <span class="do-label">Sign Out</span>
     </button>
     <button class="delete-cancel" onclick="closeModal('settings-modal')">Close</button>
+  </div>
+</div>
+
+<!-- INSTALL BANNER -->
+<!-- Shown to users who haven't installed the PWA yet.
+     Android/Chrome gets a native install button.
+     iOS Safari gets step-by-step instructions. -->
+<div class="install-banner" id="install-banner">
+  <button class="install-close" onclick="hideInstallBanner()" aria-label="Dismiss">✕</button>
+
+  <!-- Android / Chrome row -->
+  <div id="install-android-row" style="display:none; align-items:center; gap:0.85rem; width:100%">
+    <div class="install-icon">
+      <img src="icon-192.png" width="40" height="40" alt="Our Space" style="border-radius:10px" />
+    </div>
+    <div style="flex:1; min-width:0">
+      <div class="install-title">Install Our Space</div>
+      <div class="install-sub">Add to home screen for push notifications</div>
+    </div>
+    <button class="btn-install-now" onclick="triggerInstall()">Install</button>
+  </div>
+
+  <!-- iOS / Safari row -->
+  <div id="install-ios-row" style="display:none; flex-direction:column; gap:0.6rem; width:100%">
+    <div style="display:flex; align-items:center; gap:0.75rem">
+      <img src="icon-192.png" width="36" height="36" alt="" style="border-radius:9px; flex-shrink:0" />
+      <div>
+        <div class="install-title">Install for notifications</div>
+        <div class="install-sub">iOS requires the app to be installed</div>
+      </div>
+    </div>
+    <div class="ios-steps">
+      <div class="ios-step">
+        <span class="ios-step-num">1</span>
+        Tap the <strong>Share</strong> button
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="vertical-align:middle;margin-left:3px;opacity:0.75"><path d="M16 5l-1.42 1.42-1.59-1.59V16h-1.98V4.83L9.42 6.42 8 5l4-4 4 4zm4 5v11c0 1.1-.9 2-2 2H6c-1.11 0-2-.9-2-2V10c0-1.11.89-2 2-2h3v2H6v11h12V10h-3V8h3c1.1 0 2 .89 2 2z"/></svg>
+        in Safari
+      </div>
+      <div class="ios-step">
+        <span class="ios-step-num">2</span>
+        Tap <strong>"Add to Home Screen"</strong>
+      </div>
+      <div class="ios-step">
+        <span class="ios-step-num">3</span>
+        Open Our Space from your home screen
+      </div>
+    </div>
   </div>
 </div>
 
