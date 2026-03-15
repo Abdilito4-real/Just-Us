@@ -541,7 +541,172 @@
     }
     .btn-copy:active { opacity: 0.8; }
 
-    /* ANIMATIONS */
+    /* ── SWIPE TO REPLY ── */
+    .bubble-wrap { position: relative; overflow: visible; }
+    .swipe-arrow {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      font-size: 1.1rem; color: var(--gold); opacity: 0;
+      pointer-events: none; transition: opacity 0.15s;
+      user-select: none;
+    }
+    .bubble-wrap.mine   .swipe-arrow { right: calc(100% + 6px); }
+    .bubble-wrap.theirs .swipe-arrow { left:  calc(100% + 6px); }
+    .bubble-wrap.swiping .swipe-arrow { opacity: 1; }
+    .bubble { transition: transform 0.12s ease; will-change: transform; }
+
+    /* ── REPLY PREVIEW BAR ── */
+    .reply-preview {
+      display: none; align-items: center; gap: 0.6rem;
+      padding: 0.5rem 1rem; background: var(--surface);
+      border-top: 2px solid var(--gold); flex-shrink: 0;
+    }
+    .reply-preview.show { display: flex; }
+    .reply-preview-text {
+      flex: 1; display: flex; flex-direction: column; gap: 1px;
+      overflow: hidden;
+    }
+    .reply-preview-who { font-size: 0.68rem; color: var(--gold); font-weight: 500; }
+    .reply-preview-text span:last-child {
+      font-size: 0.78rem; color: var(--text-dim);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .reply-cancel {
+      background: transparent; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 1rem; padding: 0.2rem; line-height: 1;
+      flex-shrink: 0;
+    }
+
+    /* ── REPLY QUOTE inside bubble ── */
+    .reply-quote {
+      font-size: 0.72rem; color: inherit; opacity: 0.65;
+      border-left: 2px solid currentColor;
+      padding: 0.2rem 0.5rem; margin-bottom: 0.35rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 200px; border-radius: 2px;
+    }
+
+    /* ── IMAGE PREVIEW (before sending) ── */
+    .img-preview-wrap {
+      display: none; align-items: center; gap: 0.7rem;
+      padding: 0.55rem 1rem; background: var(--surface);
+      border-top: 1px solid var(--border); flex-shrink: 0;
+    }
+    .img-preview-wrap.show { display: flex; }
+    .img-preview-thumb {
+      width: 52px; height: 52px; object-fit: cover;
+      border-radius: 8px; border: 1px solid var(--border);
+    }
+    .img-preview-remove {
+      background: rgba(220,60,60,0.15); border: 1px solid rgba(220,60,60,0.3);
+      color: #f87171; border-radius: 50%; width: 22px; height: 22px;
+      font-size: 0.7rem; cursor: pointer; display: flex;
+      align-items: center; justify-content: center; flex-shrink: 0;
+    }
+
+    /* ── IMAGE BUBBLE ── */
+    .bubble.img-bubble {
+      padding: 0.25rem; background: transparent !important;
+      border: none !important;
+    }
+    .bubble.img-bubble img {
+      display: block; max-width: 220px; max-height: 260px;
+      width: 100%; border-radius: 14px; object-fit: cover;
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    .bubble.img-bubble img:active { opacity: 0.8; }
+
+    /* ── FULL-SCREEN IMAGE VIEWER ── */
+    .img-viewer {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+      z-index: 2000; display: none; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px);
+    }
+    .img-viewer.show { display: flex; }
+    .img-viewer img {
+      max-width: 95vw; max-height: 92dvh; border-radius: 10px;
+      object-fit: contain; box-shadow: 0 0 60px rgba(0,0,0,0.8);
+    }
+    .img-viewer-close {
+      position: absolute; top: calc(1.2rem + var(--sat)); right: 1.2rem;
+      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+      color: #fff; width: 36px; height: 36px; border-radius: 50%;
+      font-size: 1rem; cursor: pointer; display: flex;
+      align-items: center; justify-content: center;
+    }
+
+    /* ── STICKER BUBBLE ── */
+    .bubble.sticker-bubble {
+      background: transparent !important; border: none !important;
+      font-size: 2.6rem; padding: 0.1rem 0.2rem;
+      line-height: 1;
+    }
+
+    /* ── STICKER PICKER ── */
+    .sticker-picker {
+      position: absolute; bottom: 68px; left: 0.9rem; right: 0.9rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); z-index: 101; display: none;
+      flex-direction: column; overflow: hidden;
+    }
+    .sticker-picker.show { display: flex; }
+    .sticker-tabs {
+      display: flex; gap: 0; border-bottom: 1px solid var(--border);
+      overflow-x: auto; scrollbar-width: none;
+    }
+    .sticker-tabs::-webkit-scrollbar { display: none; }
+    .sticker-tab {
+      flex: 1; min-width: 44px; padding: 0.5rem;
+      background: transparent; border: none; font-size: 1.15rem;
+      cursor: pointer; transition: background 0.15s;
+      border-bottom: 2px solid transparent;
+    }
+    .sticker-tab.active { border-bottom-color: var(--gold); background: var(--gold-soft); }
+    .sticker-tab:hover  { background: var(--gold-soft); }
+    .sticker-grid {
+      display: grid; grid-template-columns: repeat(8, 1fr);
+      gap: 2px; padding: 0.5rem; max-height: 160px; overflow-y: auto;
+      scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+    }
+    .sticker-item {
+      font-size: 1.55rem; text-align: center; cursor: pointer;
+      padding: 0.2rem; border-radius: 8px; transition: background 0.12s, transform 0.1s;
+      line-height: 1;
+    }
+    .sticker-item:hover  { background: var(--gold-soft); }
+    .sticker-item:active { transform: scale(0.88); }
+
+    /* ── CONTEXT MENU ── */
+    .ctx-menu {
+      position: fixed; z-index: 3000;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 0.3rem 0;
+      min-width: 150px; display: none; flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+      animation: modal-in 0.16s cubic-bezier(0.34,1.3,0.64,1);
+    }
+    .ctx-menu.show { display: flex; }
+    .ctx-item {
+      background: transparent; border: none; color: var(--text);
+      padding: 0.65rem 1rem; text-align: left; cursor: pointer;
+      font-size: 0.85rem; font-family: 'DM Sans', sans-serif;
+      transition: background 0.12s;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .ctx-item:hover { background: var(--gold-soft); }
+    .ctx-item.danger { color: #f87171; }
+    .ctx-item.danger:hover { background: rgba(220,60,60,0.1); }
+    .ctx-sep { height: 1px; background: var(--border); margin: 0.2rem 0; }
+
+    /* ── EDITED LABEL ── */
+    .edited-label {
+      font-size: 0.58rem; opacity: 0.5; margin-left: 0.35rem;
+      font-style: italic; vertical-align: middle;
+    }
+    /* Inline editing state */
+    .bubble.editing {
+      outline: 2px solid var(--gold); border-radius: 12px;
+      caret-color: var(--gold);
+    }
     @keyframes pulse-ring {
       0%,100% { box-shadow: 0 0 0 0 rgba(212,175,55,0.3); }
       50%      { box-shadow: 0 0 0 10px rgba(212,175,55,0); }
@@ -580,12 +745,202 @@
       from { opacity: 0; transform: translateX(-50%) translateY(10px); }
       to   { opacity: 1; transform: translateX(-50%) translateY(0); }
     }
+
+    /* ── REPLY PREVIEW BANNER ─────────────────── */
+    .reply-preview {
+      display: none; align-items: center; gap: 0.6rem;
+      padding: 0.5rem 0.9rem; background: var(--surface2);
+      border-left: 3px solid var(--gold); margin: 0 0.9rem 0;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      font-size: 0.78rem; color: var(--text-dim); flex-shrink: 0;
+      animation: slide-down 0.18s ease;
+    }
+    .reply-preview.show { display: flex; }
+    .reply-preview-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .reply-preview-who { color: var(--gold); font-weight: 500; margin-right: 0.3rem; }
+    .reply-cancel {
+      background: none; border: none; color: var(--text-faint);
+      cursor: pointer; font-size: 1rem; padding: 0 0.2rem; line-height: 1;
+      -webkit-appearance: none; flex-shrink: 0;
+    }
+
+    /* ── QUOTED REPLY INSIDE BUBBLE ──────────────── */
+    .reply-quote {
+      border-left: 2px solid rgba(255,255,255,0.35);
+      padding: 0.25rem 0.55rem; margin-bottom: 0.35rem;
+      border-radius: 0 4px 4px 0; font-size: 0.75rem;
+      opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bubble-wrap.mine .reply-quote { border-color: rgba(0,0,0,0.25); }
+
+    /* ── SWIPE-TO-REPLY ARROW ─────────────────── */
+    .swipe-arrow {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8rem; opacity: 0; transition: opacity 0.15s;
+      pointer-events: none; flex-shrink: 0;
+      color: var(--gold);
+    }
+    .bubble-wrap { position: relative; }
+    .bubble-wrap.mine   .swipe-arrow { right: calc(100% + 6px); }
+    .bubble-wrap.theirs .swipe-arrow { left:  calc(100% + 6px); }
+    .bubble-wrap.swiping .swipe-arrow { opacity: 1; }
+    .bubble-wrap.swiping .bubble {
+      transition: transform 0.1s ease-out;
+    }
+
+    /* ── LONG-PRESS CONTEXT MENU ─────────────── */
+    .ctx-menu {
+      position: fixed; z-index: 2000;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.35rem;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+      display: none; flex-direction: column; min-width: 160px;
+      animation: modal-in 0.18s cubic-bezier(0.34,1.3,0.64,1);
+    }
+    .ctx-menu.show { display: flex; }
+    .ctx-item {
+      display: flex; align-items: center; gap: 0.65rem;
+      padding: 0.65rem 0.85rem; border-radius: 10px;
+      font-size: 0.85rem; color: var(--text); cursor: pointer;
+      transition: background 0.15s; border: none; background: none;
+      font-family: 'DM Sans', sans-serif; width: 100%; text-align: left;
+      -webkit-appearance: none;
+    }
+    .ctx-item:hover, .ctx-item:active { background: var(--gold-soft); color: var(--gold); }
+    .ctx-item.danger { color: #f87171; }
+    .ctx-item.danger:hover { background: rgba(248,113,113,0.08); }
+    .ctx-sep { height: 1px; background: var(--border); margin: 0.2rem 0; }
+
+    /* ── IMAGE BUBBLE ─────────────────────────── */
+    .bubble.img-bubble {
+      padding: 0; overflow: hidden; background: transparent !important;
+      border: 1px solid var(--border) !important; max-width: 220px;
+    }
+    .bubble.img-bubble img {
+      width: 100%; max-width: 220px; display: block;
+      border-radius: 16px; cursor: pointer;
+    }
+    .img-caption {
+      padding: 0.4rem 0.7rem 0.3rem; font-size: 0.82rem;
+      background: var(--surface2); color: var(--text);
+    }
+
+    /* image full-screen viewer */
+    .img-viewer {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+      z-index: 3000; display: none; align-items: center; justify-content: center;
+    }
+    .img-viewer.show { display: flex; }
+    .img-viewer img { max-width: 95vw; max-height: 90vh; border-radius: 10px; }
+    .img-viewer-close {
+      position: absolute; top: 1.2rem; right: 1.2rem;
+      background: rgba(255,255,255,0.1); border: none; border-radius: 50%;
+      width: 40px; height: 40px; font-size: 1.2rem; color: #fff;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+
+    /* image upload preview in input */
+    .img-preview-wrap {
+      display: none; padding: 0.4rem 0.9rem; flex-shrink: 0;
+    }
+    .img-preview-wrap.show { display: flex; gap: 0.5rem; align-items: center; }
+    .img-preview-thumb {
+      width: 54px; height: 54px; border-radius: 10px;
+      object-fit: cover; border: 1px solid var(--border);
+    }
+    .img-preview-remove {
+      background: rgba(255,255,255,0.08); border: none; border-radius: 50%;
+      width: 24px; height: 24px; color: var(--text-dim); cursor: pointer;
+      font-size: 0.9rem; display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── STICKER PICKER ───────────────────────── */
+    .sticker-picker {
+      position: absolute; bottom: 68px; left: 0; right: 0;
+      background: var(--surface); border-top: 1px solid var(--border);
+      padding: 0.75rem; display: none; flex-direction: column; gap: 0.6rem;
+      z-index: 200; max-height: 220px; overflow-y: auto;
+    }
+    .sticker-picker.show { display: flex; }
+    .sticker-tabs {
+      display: flex; gap: 0.4rem; overflow-x: auto; scrollbar-width: none;
+      border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;
+    }
+    .sticker-tabs::-webkit-scrollbar { display: none; }
+    .sticker-tab {
+      background: none; border: none; font-size: 1.2rem; cursor: pointer;
+      padding: 0.2rem 0.5rem; border-radius: 8px; flex-shrink: 0;
+      transition: background 0.15s; -webkit-appearance: none;
+    }
+    .sticker-tab.active, .sticker-tab:hover { background: var(--gold-soft); }
+    .sticker-grid {
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem;
+    }
+    .sticker-item {
+      font-size: 1.7rem; cursor: pointer; text-align: center;
+      padding: 0.2rem; border-radius: 8px; transition: transform 0.15s, background 0.15s;
+      line-height: 1.3;
+    }
+    .sticker-item:hover, .sticker-item:active { transform: scale(1.25); background: var(--gold-soft); }
+
+    /* sticker bubble */
+    .bubble.sticker-bubble {
+      background: transparent !important; border: none !important;
+      font-size: 3rem; padding: 0.2rem; line-height: 1;
+    }
+
+    /* ── EDITED LABEL ─────────────────────────── */
+    .edited-label { font-size: 0.6rem; color: var(--text-faint); margin-left: 4px; }
+
+    /* ── EDIT INPUT (inline) ─────────────────── */
+    .bubble.editing {
+      outline: 2px solid var(--gold) !important;
+      border-radius: 14px !important;
+    }
+
+    @keyframes slide-down {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── LOADING SCREEN ───────────────────────── */
+    #loading-screen {
+      align-items: center; justify-content: center;
+      background: var(--bg);
+    }
+    .loading-logo {
+      display: flex; flex-direction: column; align-items: center; gap: 1.2rem;
+    }
+    .loading-ring {
+      width: 60px; height: 60px; border-radius: 50%;
+      border: 2px solid var(--border);
+      border-top-color: var(--gold);
+      animation: spin 0.9s linear infinite;
+    }
+    .loading-wordmark {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.8rem; font-weight: 300;
+      letter-spacing: 0.12em; color: var(--gold);
+      opacity: 0.85;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
 
+<!-- ═══ LOADING ═══ -->
+<div id="loading-screen" class="screen active">
+  <div class="loading-logo">
+    <div class="loading-ring"></div>
+    <div class="loading-wordmark">Our Space</div>
+  </div>
+</div>
+
 <!-- ═══ AUTH ═══ -->
-<div id="auth-screen" class="screen active">
+<div id="auth-screen" class="screen">
   <div class="auth-logo">
     <div class="ring">
       <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
@@ -696,7 +1051,23 @@
     </div>
   </div>
 
-  <div class="input-area">
+  <!-- REPLY PREVIEW -->
+  <div class="reply-preview" id="reply-preview">
+    <div class="reply-preview-text">
+      <span class="reply-preview-who" id="reply-who"></span>
+      <span id="reply-text-preview"></span>
+    </div>
+    <button class="reply-cancel" onclick="cancelReply()">✕</button>
+  </div>
+
+  <!-- IMAGE PREVIEW (before sending) -->
+  <div class="img-preview-wrap" id="img-preview-wrap">
+    <img class="img-preview-thumb" id="img-preview-thumb" src="" alt="" />
+    <button class="img-preview-remove" onclick="cancelImageSend()">✕</button>
+    <span style="font-size:0.75rem;color:var(--text-dim)">tap send to share</span>
+  </div>
+
+  <div class="input-area" style="position:relative">
     <div class="emoji-picker" id="emoji-picker">
       <span onclick="insertEmoji('❤️')">❤️</span>
       <span onclick="insertEmoji('😘')">😘</span>
@@ -715,8 +1086,20 @@
       <span onclick="insertEmoji('🌷')">🌷</span>
       <span onclick="insertEmoji('💐')">💐</span>
     </div>
+    <div class="sticker-picker" id="sticker-picker">
+      <div class="sticker-tabs">
+        <button class="sticker-tab active" onclick="showStickerCat(0,this)">💛</button>
+        <button class="sticker-tab" onclick="showStickerCat(1,this)">🥰</button>
+        <button class="sticker-tab" onclick="showStickerCat(2,this)">🌙</button>
+        <button class="sticker-tab" onclick="showStickerCat(3,this)">🌸</button>
+        <button class="sticker-tab" onclick="showStickerCat(4,this)">😂</button>
+      </div>
+      <div class="sticker-grid" id="sticker-grid"></div>
+    </div>
     <div class="input-wrap">
-      <button class="emoji-btn" onclick="toggleEmojiPicker()">☺</button>
+      <button class="emoji-btn" onclick="toggleEmojiPicker()" title="Emoji">☺</button>
+      <button class="emoji-btn" onclick="triggerImagePick()" title="Send image" style="font-size:1.15rem">🖼</button>
+      <button class="emoji-btn" onclick="toggleStickerPicker()" title="Stickers" id="sticker-btn" style="font-size:1.1rem">✨</button>
       <textarea
         class="msg-input" id="msg-input"
         placeholder="say something sweet…"
@@ -787,6 +1170,24 @@
   <span id="toast-icon">💛</span>
   <span id="toast-text"></span>
 </div>
+
+<!-- IMAGE VIEWER -->
+<div class="img-viewer" id="img-viewer" onclick="closeImgViewer()">
+  <img id="img-viewer-img" src="" alt="" />
+  <button class="img-viewer-close" onclick="closeImgViewer()">✕</button>
+</div>
+
+<!-- CONTEXT MENU -->
+<div class="ctx-menu" id="ctx-menu">
+  <button class="ctx-item" id="ctx-reply"  onclick="ctxAction('reply')">↩ Reply</button>
+  <button class="ctx-item" id="ctx-copy"   onclick="ctxAction('copy')">⎘ Copy</button>
+  <button class="ctx-item" id="ctx-edit"   onclick="ctxAction('edit')">✎ Edit</button>
+  <div   class="ctx-sep"></div>
+  <button class="ctx-item danger" id="ctx-delete" onclick="ctxAction('delete')">✕ Delete</button>
+</div>
+
+<!-- Hidden image file input -->
+<input type="file" id="img-file-input" accept="image/*" style="display:none" onchange="onImageSelected(event)" />
 
 <script src="app.js"></script>
 </body>
