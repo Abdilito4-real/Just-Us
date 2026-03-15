@@ -1310,10 +1310,10 @@ async function sendPushToPartner(msg) {
     await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${(await db.auth.getSession()).data.session?.access_token}`,
-        'apikey': SUPABASE_ANON_KEY,
-      },
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'apikey': SUPABASE_ANON_KEY,
+},
       body: JSON.stringify({
         recipientId: partnerProfile.id,
         title: 'Our Space 💛',
