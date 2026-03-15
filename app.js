@@ -7,6 +7,7 @@
 const SUPABASE_URL      = 'https://eekpkpjjdyuzpyxkodhd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVla3BrcGpqZHl1enB5eGtvZGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzYyODAsImV4cCI6MjA4OTE1MjI4MH0.azUzGvPV23FJvb94B_7DELtsn36clxOFun5MnC3ZIto';
 
+
 const { createClient } = supabase;
 
 // ── Custom storage: bypasses Supabase navigator.locks wrapper ─────────────
@@ -104,6 +105,42 @@ function ldStep(idx) {
     if (i < _ldCurrent)       { dot.className = 'ld-dot done';   }
     else if (i === _ldCurrent) { dot.className = 'ld-dot active'; }
     else                       { dot.className = 'ld-dot';        }
+  }
+}
+
+// Update step text without changing the bar (for slow connection messages)
+function ldSetMessage(msg) {
+  const textEl = document.getElementById('ld-step-text');
+  if (!textEl) return;
+  textEl.style.opacity = '0';
+  setTimeout(() => { textEl.textContent = msg; textEl.style.opacity = '1'; }, 180);
+}
+
+// Show a tappable error state on the loader
+function ldError(msg, onRetry) {
+  const textEl = document.getElementById('ld-step-text');
+  const pctEl  = document.getElementById('ld-step-pct');
+  const barEl  = document.getElementById('ld-bar');
+  if (barEl)  { barEl.style.width = '0%'; barEl.style.background = 'rgba(248,113,113,0.5)'; }
+  if (pctEl)  pctEl.textContent = '!';
+  if (textEl) {
+    textEl.style.opacity = '0';
+    setTimeout(() => {
+      textEl.textContent  = msg;
+      textEl.style.color  = '#f87171';
+      textEl.style.cursor = 'pointer';
+      textEl.style.opacity = '1';
+      textEl.onclick = () => {
+        // Reset bar colour + message and retry
+        if (barEl)  { barEl.style.width = '18%'; barEl.style.background = ''; }
+        if (pctEl)  pctEl.textContent = '18%';
+        textEl.style.color  = '';
+        textEl.style.cursor = '';
+        textEl.onclick = null;
+        ldStep(2);
+        if (onRetry) onRetry();
+      };
+    }, 180);
   }
 }
 
@@ -214,14 +251,14 @@ db.auth.onAuthStateChange(async (event, session) => {
 
   if (event === 'INITIAL_SESSION') {
     if (session?.user) {
-      // Valid stored session restored — boot app
       if (_appBooted && currentUser?.id === session.user.id) return;
-      ldStep(2); // "Restoring your profile…"
       currentUser = session.user;
       _appBooted  = true;
-      await loadProfile();
+      ldStep(2); // "Restoring your profile…"
+      // Yield to the event loop so the Supabase client finishes initialising
+      // its fetch queue before we hit the DB — prevents silent hang
+      setTimeout(() => loadProfile(), 0);
     } else {
-      // No session at all — show login (not a flash, genuinely logged out)
       ldDone(() => showScreen('auth-screen'));
     }
   }
@@ -229,10 +266,10 @@ db.auth.onAuthStateChange(async (event, session) => {
   if (event === 'SIGNED_IN') {
     if (_appBooted && currentUser?.id === session?.user?.id) return;
     if (session?.user) {
-      ldStep(2); // "Restoring your profile…"
       currentUser = session.user;
       _appBooted  = true;
-      await loadProfile();
+      ldStep(2); // "Restoring your profile…"
+      setTimeout(() => loadProfile(), 0);
     }
   }
 
@@ -374,42 +411,70 @@ async function signOut() {
 // ═══════════════════════════════════════════════
 
 async function loadProfile() {
-  let data, error;
+  // Give the Supabase client a tick to fully initialise its fetch queue
+  // before firing a DB query. Without this, queries sent immediately after
+  // INITIAL_SESSION fire silently hang on some browsers / WebViews.
+  await new Promise(r => setTimeout(r, 80));
+
+  // ── Fetch profile with timeout + retry ────────────────────────────────
+  const fetchProfile = () =>
+    db.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
+
+  let data = null, error = null;
+
+  const withTimeout = (promise, ms) => {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); })
+    ]).finally(() => clearTimeout(timer));
+  };
+
   try {
-    ({ data, error } = await db
-      .from('profiles').select('*').eq('id', currentUser.id).maybeSingle());
-  } catch(e) {
-    // Catch any stray AbortError from supabase internals and retry once
-    if (e?.name === 'AbortError') {
-      await new Promise(r => setTimeout(r, 600));
-      try {
-        ({ data, error } = await db
-          .from('profiles').select('*').eq('id', currentUser.id).maybeSingle());
-      } catch(e2) { console.warn('loadProfile retry failed:', e2.message); return; }
-    } else { console.warn('loadProfile threw:', e.message); return; }
+    ({ data, error } = await withTimeout(fetchProfile(), 7000));
+  } catch (e) {
+    // First attempt failed (timeout or AbortError) — wait and retry once
+    ldSetMessage('Connection slow, retrying…');
+    await new Promise(r => setTimeout(r, 1200));
+    try {
+      ({ data, error } = await withTimeout(fetchProfile(), 10000));
+    } catch (e2) {
+      // Both attempts failed — show error with a manual retry option
+      ldError('Could not connect. Check your internet and tap to retry.', () => {
+        _appBooted = false;
+        loadProfile();
+      });
+      return;
+    }
   }
 
   if (error && error.code !== 'PGRST116') {
     console.warn('loadProfile error:', error.message);
+    ldError('Profile error: ' + error.message + '. Tap to retry.', () => {
+      _appBooted = false;
+      loadProfile();
+    });
+    return;
   }
 
   userProfile = data || null;
 
-  // New user — no profile row yet
+  // New user — no profile row yet, create it
   if (!userProfile) {
-    // Auto-create a minimal profile so they can continue
     const displayName = currentUser.user_metadata?.display_name || currentUser.email.split('@')[0];
-    await db.from('profiles').upsert({
-      id:           currentUser.id,
-      email:        currentUser.email,
-      display_name: displayName,
+    const { error: upsertErr } = await db.from('profiles').upsert({
+      id: currentUser.id, email: currentUser.email, display_name: displayName,
     });
+    if (upsertErr) {
+      ldError('Could not create profile. Tap to retry.', () => { _appBooted = false; loadProfile(); });
+      return;
+    }
     userProfile = { id: currentUser.id, email: currentUser.email, display_name: displayName };
   }
 
-  // Check if setup is complete (has partner linked)
+  // Setup incomplete — partner not linked yet
   if (!userProfile.partner_email) {
-    prefillSetupFromInvite(); // check URL for invite params
+    prefillSetupFromInvite();
     ldDone(() => showScreen('setup-screen'));
     return;
   }
