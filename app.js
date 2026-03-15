@@ -7,10 +7,8 @@
 const SUPABASE_URL      = 'https://eekpkpjjdyuzpyxkodhd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVla3BrcGpqZHl1enB5eGtvZGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzYyODAsImV4cCI6MjA4OTE1MjI4MH0.azUzGvPV23FJvb94B_7DELtsn36clxOFun5MnC3ZIto';
 
- 
-
 const { createClient } = supabase;
- 
+
 // ── Custom storage: bypasses Supabase navigator.locks wrapper ─────────────
 // The default gotrue-js storage wraps every localStorage read/write inside
 // navigator.locks.request().  In PWAs, iOS WebViews and some Chromium builds
@@ -22,7 +20,7 @@ const _customStorage = {
   setItem:    (k, v) => { try { localStorage.setItem(k, v);           } catch(_) {} },
   removeItem: (k)    => { try { localStorage.removeItem(k);           } catch(_) {} },
 };
- 
+
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession:     true,        // stay logged in across refresh / PWA reopen
@@ -34,7 +32,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
   realtime: { params: { eventsPerSecond: 10 } },
 });
- 
+
 // ── State ──────────────────────────────────────
 let currentUser      = null;
 let userProfile      = null;
@@ -52,7 +50,7 @@ let promptIndex      = 0;
 let notifSound       = null;
 let currentAudio     = null;
 let _appBooted       = false; // prevents double-init
- 
+
 // ── Suppress residual AbortError from supabase-js internals ─────────────
 // Even with custom storage, the library may fire one AbortError on first
 // load from a stale lock state. Catch it here so it never appears in console.
@@ -61,7 +59,7 @@ window.addEventListener('unhandledrejection', (e) => {
     e.preventDefault();
   }
 });
- 
+
 // ── Audio tone ─────────────────────────────────
 function initAudio() {
   try {
@@ -83,7 +81,7 @@ function initAudio() {
 }
 document.addEventListener('click',    () => { if (!notifSound) initAudio(); }, { once: true });
 document.addEventListener('touchend', () => { if (!notifSound) initAudio(); }, { once: true });
- 
+
 // ── Daily prompts ──────────────────────────────
 const PROMPTS = [
   "What's one small thing I did recently that made you smile?",
@@ -102,25 +100,65 @@ const PROMPTS = [
   "What little habit of mine secretly makes you happy?",
   "If we could teleport anywhere right now, where would you take us?",
 ];
- 
+
 // ═══════════════════════════════════════════════
-//  BOOTSTRAP — single listener, no getSession() race
+//  BOOTSTRAP
+//  Problem: onAuthStateChange fires INITIAL_SESSION
+//  with session=null before localStorage is read,
+//  which incorrectly shows the login screen even
+//  when a session is stored.
+//
+//  Fix: check localStorage ourselves synchronously
+//  BEFORE registering the listener. If a session key
+//  exists we show a "loading" screen immediately so
+//  the user never sees the login screen flash.
+//  The listener then boots the app when ready.
 // ═══════════════════════════════════════════════
+
+// Show loading screen immediately if we have a stored session
+(function checkStoredSession() {
+  try {
+    const raw = localStorage.getItem('our-space-auth');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Supabase stores { access_token, user, ... } or { currentSession: {...} }
+      const hasToken = parsed?.access_token || parsed?.currentSession?.access_token;
+      if (hasToken) {
+        // We have a stored session — show loading, never flash login screen
+        showScreen('loading-screen');
+        return;
+      }
+    }
+  } catch(_) {}
+  // No stored session → show login right away
+  showScreen('auth-screen');
+})();
+
 db.auth.onAuthStateChange(async (event, session) => {
   if (!event) return;
- 
-  if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+
+  if (event === 'INITIAL_SESSION') {
     if (session?.user) {
-      if (_appBooted && currentUser?.id === session.user.id) return; // already running
+      // Valid stored session restored — boot app
+      if (_appBooted && currentUser?.id === session.user.id) return;
       currentUser = session.user;
       _appBooted  = true;
       await loadProfile();
     } else {
-      // No saved session → show login
+      // No session at all — show login (not a flash, genuinely logged out)
       showScreen('auth-screen');
     }
   }
- 
+
+  if (event === 'SIGNED_IN') {
+    if (_appBooted && currentUser?.id === session?.user?.id) return;
+    if (session?.user) {
+      currentUser = session.user;
+      _appBooted  = true;
+      await loadProfile();
+    }
+  }
+
   if (event === 'SIGNED_OUT') {
     _appBooted = false; currentUser = null; userProfile = null; partnerProfile = null;
     stopPresenceHeartbeat();
@@ -129,12 +167,12 @@ db.auth.onAuthStateChange(async (event, session) => {
     document.removeEventListener('visibilitychange', handleVisibilityRead);
     showScreen('auth-screen');
   }
- 
+
   if (event === 'TOKEN_REFRESHED' && session?.user) {
     currentUser = session.user;
   }
 });
- 
+
 // ═══════════════════════════════════════════════
 //  AUTH
 // ═══════════════════════════════════════════════
@@ -148,18 +186,28 @@ function toggleAuthMode() {
     : 'New here? <span onclick="toggleAuthMode()">Create account</span>';
   clearAuthError();
 }
- 
+
 async function handleAuth() {
   const email    = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   const btn      = document.getElementById('auth-btn');
- 
+
   if (!email || !password) return showAuthError('Please fill in all fields.');
   if (password.length < 6)  return showAuthError('Password must be at least 6 characters.');
- 
+
   btn.disabled = true;
   btn.textContent = isSignUp ? 'Creating…' : 'Signing in…';
- 
+
+  // Guard: if already signed in (e.g. session restored while login screen showed),
+  // just boot directly instead of calling signInWithPassword which would hang.
+  const { data: existing } = await db.auth.getSession();
+  if (existing?.session?.user && !isSignUp) {
+    currentUser = existing.session.user;
+    _appBooted  = true;
+    await loadProfile();
+    return;
+  }
+
   if (isSignUp) {
     // ── SIGN UP ──────────────────────────────────
     const name = document.getElementById('signup-name').value.trim();
@@ -167,7 +215,7 @@ async function handleAuth() {
       btn.disabled = false; btn.textContent = 'Create account';
       return showAuthError('Please enter your name.');
     }
- 
+
     // Step 1: Create the auth user
     const { data: signUpData, error: signUpErr } = await db.auth.signUp({
       email, password,
@@ -177,12 +225,12 @@ async function handleAuth() {
         emailRedirectTo: undefined,
       },
     });
- 
+
     if (signUpErr) {
       btn.disabled = false; btn.textContent = 'Create account';
       return showAuthError(signUpErr.message);
     }
- 
+
     // Supabase may auto-confirm (if you disabled "confirm email" in dashboard)
     // OR it may require confirmation. We handle both:
     if (signUpData.session) {
@@ -193,11 +241,11 @@ async function handleAuth() {
       btn.disabled = false; btn.textContent = 'Create account';
       showAuthError('✓ Account created! Check your email to confirm, then sign in here.');
     }
- 
+
   } else {
     // ── SIGN IN ──────────────────────────────────
     const { data, error } = await db.auth.signInWithPassword({ email, password });
- 
+
     if (error) {
       btn.disabled = false; btn.textContent = 'Sign in';
       // Friendly error messages
@@ -207,12 +255,12 @@ async function handleAuth() {
         return showAuthError('Please confirm your email first, then sign in.');
       return showAuthError(error.message);
     }
- 
+
     btn.textContent = 'Welcome back ✦';
     // onAuthStateChange(SIGNED_IN) fires next and boots the app — no manual call needed
   }
 }
- 
+
 function showAuthError(msg) {
   const e = document.getElementById('auth-error');
   e.textContent = msg; e.classList.add('show');
@@ -220,7 +268,7 @@ function showAuthError(msg) {
 function clearAuthError() {
   document.getElementById('auth-error').classList.remove('show');
 }
- 
+
 async function signOut() {
   _appBooted = false;
   db.removeAllChannels();
@@ -230,7 +278,7 @@ async function signOut() {
   try { await updatePresence('offline'); } catch(_) {}
   await db.auth.signOut();
 }
- 
+
 // ═══════════════════════════════════════════════
 //  PROFILE & SETUP
 //
@@ -247,7 +295,7 @@ async function signOut() {
 //  Both profiles store each other's email so loadPartnerProfile()
 //  can find the other person without any complex join logic.
 // ═══════════════════════════════════════════════
- 
+
 async function loadProfile() {
   let data, error;
   try {
@@ -263,13 +311,13 @@ async function loadProfile() {
       } catch(e2) { console.warn('loadProfile retry failed:', e2.message); return; }
     } else { console.warn('loadProfile threw:', e.message); return; }
   }
- 
+
   if (error && error.code !== 'PGRST116') {
     console.warn('loadProfile error:', error.message);
   }
- 
+
   userProfile = data || null;
- 
+
   // New user — no profile row yet
   if (!userProfile) {
     // Auto-create a minimal profile so they can continue
@@ -281,21 +329,21 @@ async function loadProfile() {
     });
     userProfile = { id: currentUser.id, email: currentUser.email, display_name: displayName };
   }
- 
+
   // Check if setup is complete (has partner linked)
   if (!userProfile.partner_email) {
     prefillSetupFromInvite(); // check URL for invite params
     showScreen('setup-screen');
     return;
   }
- 
+
   await loadPartnerProfile();
   showScreen('app-screen');
   initApp();
 }
- 
+
 // ── Setup screen helpers ──────────────────────
- 
+
 // Check URL for ?invite=EMAIL param — babe arrives via invite link
 function prefillSetupFromInvite() {
   const params = new URLSearchParams(window.location.search);
@@ -310,21 +358,21 @@ function prefillSetupFromInvite() {
     window.history.replaceState({}, '', window.location.pathname);
   }
 }
- 
+
 async function saveSetup() {
   const partnerName  = document.getElementById('partner-name').value.trim();
   const partnerEmail = document.getElementById('partner-email').value.trim().toLowerCase();
   const myName       = document.getElementById('my-name').value.trim();
- 
+
   if (!myName)        return showToast('⚠️', 'Enter your name');
   if (!partnerName)   return showToast('⚠️', 'Enter your partner\'s name');
   if (!partnerEmail)  return showToast('⚠️', 'Enter your partner\'s email');
   if (partnerEmail === currentUser.email.toLowerCase())
     return showToast('⚠️', 'That\'s your own email!');
- 
+
   const btn = document.getElementById('setup-btn');
   btn.disabled = true; btn.textContent = 'Saving…';
- 
+
   const { error } = await db.from('profiles').upsert({
     id:            currentUser.id,
     email:         currentUser.email,
@@ -332,37 +380,37 @@ async function saveSetup() {
     partner_name:  partnerName,
     partner_email: partnerEmail,
   });
- 
+
   if (error) {
     btn.disabled = false; btn.textContent = 'Enter our space →';
     return showToast('⚠️', error.message);
   }
- 
+
   // Show invite link for partner
   showInviteLink(partnerEmail, myName);
   btn.disabled = false; btn.textContent = 'Enter our space →';
- 
+
   // Reload profile — if partner already exists, go straight to chat
   await loadProfile();
 }
- 
+
 function showInviteLink(partnerEmail, myName) {
   const base = window.location.origin + window.location.pathname;
   const link = `${base}?invite=${encodeURIComponent(currentUser.email)}&name=${encodeURIComponent(myName)}`;
- 
+
   const box = document.getElementById('invite-box');
   const url = document.getElementById('invite-url');
   if (!box || !url) return;
   url.value = link;
   box.classList.remove('hidden');
 }
- 
+
 function copyInviteLink() {
   const url = document.getElementById('invite-url');
   if (!url) return;
   navigator.clipboard.writeText(url.value).then(() => showToast('✓', 'Link copied! Send it to her'));
 }
- 
+
 async function loadPartnerProfile() {
   if (!userProfile?.partner_email) return;
   // maybeSingle() returns null (not 406) when the partner hasn't signed up yet
@@ -373,7 +421,7 @@ async function loadPartnerProfile() {
   partnerProfile = data || null;
   updatePartnerUI();
 }
- 
+
 function updatePartnerUI() {
   const name = userProfile?.partner_name || 'Your babe';
   document.getElementById('partner-initial').textContent      = name.charAt(0).toUpperCase();
@@ -386,7 +434,7 @@ function updatePartnerUI() {
     if (label) { label.textContent = 'waiting for her to join…'; label.dataset.status = 'offline'; }
   }
 }
- 
+
 // ═══════════════════════════════════════════════
 //  APP INIT
 // ═══════════════════════════════════════════════
@@ -402,16 +450,16 @@ async function initApp() {
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
 }
- 
+
 function handleVisibility()      { updatePresence(document.hidden ? 'away' : 'online'); }
 async function handleVisibilityRead() { if (!document.hidden) await markAllRead(); }
- 
+
 function setupDateDivider() {
   const opts = { weekday: 'long', month: 'long', day: 'numeric' };
   document.getElementById('date-divider').textContent =
     new Date().toLocaleDateString('en-US', opts).toLowerCase();
 }
- 
+
 // ── Presence ───────────────────────────────────
 function startPresenceHeartbeat() {
   stopPresenceHeartbeat();
@@ -426,7 +474,7 @@ async function updatePresence(status) {
     .update({ presence: status, last_seen: new Date().toISOString() })
     .eq('id', currentUser.id);
 }
- 
+
 function updatePartnerPresence(status, lastSeenISO) {
   const dot   = document.getElementById('presence-dot');
   const label = document.getElementById('header-status');
@@ -440,7 +488,7 @@ function updatePartnerPresence(status, lastSeenISO) {
     label.textContent = lastSeenISO ? 'last seen ' + formatLastSeen(lastSeenISO) : 'offline';
   }
 }
- 
+
 function formatLastSeen(iso) {
   if (!iso) return 'a while ago';
   const diff  = Date.now() - new Date(iso).getTime();
@@ -453,28 +501,28 @@ function formatLastSeen(iso) {
   if (days === 1) return `yesterday at ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
- 
+
 // ── Messages ───────────────────────────────────
 async function loadMessages() {
   const { data, error } = await db
     .from('messages').select('*')
     .order('created_at', { ascending: true }).limit(120);
   if (error) { console.error('loadMessages:', error.message); return; }
- 
+
   const area = document.getElementById('messages-area');
   [...area.querySelectorAll('.bubble-wrap, .event-msg, .day-sep')].forEach(el => el.remove());
- 
+
   let lastDateStr = null;
   (data || []).forEach(msg => {
     const d = new Date(msg.created_at).toDateString();
     if (d !== lastDateStr) { insertDaySeparator(msg.created_at); lastDateStr = d; }
     renderMessage(msg);
   });
- 
+
   scrollToBottom(true);
   await markAllRead();
 }
- 
+
 function insertDaySeparator(iso) {
   const area   = document.getElementById('messages-area');
   const typing = document.getElementById('typing-indicator');
@@ -488,13 +536,14 @@ function insertDaySeparator(iso) {
   sep.className = 'day-sep date-divider'; sep.textContent = label; sep.dataset.date = d.toDateString();
   area.insertBefore(sep, typing);
 }
- 
+
 function renderMessage(msg) {
   const isMine = msg.sender_id === currentUser.id;
   const area   = document.getElementById('messages-area');
   const typing = document.getElementById('typing-indicator');
   if (area.querySelector(`[data-id="${msg.id}"]`)) return;
- 
+
+  // ── Centred event messages ─────────────────────────────────
   if (['heartbeat','hug','kiss','thinking'].includes(msg.type)) {
     const div = document.createElement('div');
     div.className = 'event-msg'; div.dataset.id = msg.id;
@@ -509,19 +558,42 @@ function renderMessage(msg) {
     div.innerHTML = `<div class="ev-icon ${msg.type}">${icons[msg.type]}</div><span>${labels[msg.type]}</span>`;
     area.insertBefore(div, typing); return;
   }
- 
+
   const wrap = document.createElement('div');
   wrap.className = `bubble-wrap ${isMine ? 'mine' : 'theirs'}`; wrap.dataset.id = msg.id;
- 
+
+  // ── Swipe-arrow indicator ──────────────────────────────────
+  const arrow = document.createElement('div');
+  arrow.className = 'swipe-arrow'; arrow.textContent = '↩';
+  wrap.appendChild(arrow);
+
   const bubble  = document.createElement('div');
   const timeStr = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
- 
+
+  // ── Reply quote (if this msg is a reply) ──────────────────
+  if (msg.reply_preview) {
+    const quote = document.createElement('div');
+    quote.className = 'reply-quote';
+    quote.textContent = msg.reply_preview;
+    bubble.appendChild(quote);
+  }
+
+  // ── Bubble content ────────────────────────────────────────
   if (msg.type === 'affection') {
     bubble.className = 'bubble affection-bubble'; bubble.textContent = msg.content;
+  } else if (msg.type === 'sticker') {
+    bubble.className = 'bubble sticker-bubble'; bubble.textContent = msg.content;
+  } else if (msg.type === 'image') {
+    bubble.className = 'bubble img-bubble';
+    const img = document.createElement('img');
+    img.src = msg.content; img.alt = 'image';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => openImgViewer(msg.content));
+    bubble.appendChild(img);
   } else if (msg.type === 'voice') {
     bubble.className = 'bubble voice-bubble';
     const bars = Array.from({length:7},(_,i)=>`<span style="animation-delay:${i*0.1}s"></span>`).join('');
-    bubble.innerHTML = `
+    bubble.innerHTML = (msg.reply_preview ? bubble.innerHTML : '') + `
       <button class="voice-play" data-src="${msg.content}">
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </button>
@@ -531,13 +603,22 @@ function renderMessage(msg) {
       playVoice(this.dataset.src, this);
     });
   } else {
-    bubble.className = 'bubble'; bubble.textContent = msg.content;
+    bubble.className = 'bubble';
+    const textNode = document.createElement('span');
+    textNode.textContent = msg.content;
+    bubble.appendChild(textNode);
+    if (msg.edited) {
+      const el = document.createElement('span');
+      el.className = 'edited-label'; el.textContent = 'edited';
+      bubble.appendChild(el);
+    }
   }
- 
+
+  // ── Meta row ──────────────────────────────────────────────
   const meta   = document.createElement('div'); meta.className = 'bubble-meta';
   const timeEl = document.createElement('span'); timeEl.className = 'bubble-time'; timeEl.textContent = timeStr;
   meta.appendChild(timeEl);
- 
+
   if (isMine) {
     const tick = document.createElement('span');
     tick.className = `read-tick ${msg.read_at ? 'read' : 'sent'}`;
@@ -545,17 +626,21 @@ function renderMessage(msg) {
     tick.title     = msg.read_at ? `Read ${formatLastSeen(msg.read_at)}` : 'Sent';
     meta.appendChild(tick);
   }
- 
+
   wrap.appendChild(bubble); wrap.appendChild(meta);
   area.insertBefore(wrap, typing);
+
+  // ── Attach interactions ───────────────────────────────────
+  attachSwipeReply(wrap, msg);
+  attachLongPress(wrap, msg);
 }
- 
+
 function buildTick(isRead) {
   return isRead
     ? `<svg viewBox="0 0 20 12" width="18" height="12"><path d="M1 6l4 4L14 1" stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 10l4-4" stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round"/></svg>`
     : `<svg viewBox="0 0 14 12" width="14" height="12"><path d="M1 6l4 4L13 1" stroke="#555" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
- 
+
 async function markAllRead() {
   if (!currentUser || !partnerProfile || document.hidden) return;
   await db.from('messages')
@@ -567,24 +652,42 @@ function updateReadTickInUI(msgId) {
   const tick = wrap.querySelector('.read-tick'); if (!tick) return;
   tick.className = 'read-tick read'; tick.innerHTML = buildTick(true); tick.title = 'Read';
 }
- 
+
 // ── Send message ───────────────────────────────
 async function sendMessage() {
+  // If there's a pending image, send that instead
+  if (_pendingImageFile) { await sendImageMessage(); return; }
+
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   if (!content || !currentUser) return;
-  input.value = ''; autoResize(input); closeEmojiPicker(); clearTypingFlag();
-  const { data, error } = await db.from('messages')
-    .insert({ sender_id: currentUser.id, type: 'text', content }).select().single();
+  input.value = ''; autoResize(input); closeEmojiPicker(); closeStickerPicker(); clearTypingFlag();
+
+  const row = {
+    sender_id: currentUser.id,
+    type:      'text',
+    content,
+  };
+  // Attach reply metadata
+  if (_replyTarget) {
+    row.reply_to_id  = _replyTarget.id;
+    row.reply_preview = (_replyTarget.type === 'voice' ? '🎙 Voice note'
+                       : _replyTarget.type === 'image' ? '🖼 Image'
+                       : _replyTarget.type === 'sticker' ? _replyTarget.content
+                       : (_replyTarget.content || '').slice(0, 60));
+    cancelReply();
+  }
+
+  const { data, error } = await db.from('messages').insert(row).select().single();
   if (!error && data) { renderMessage(data); scrollToBottom(); }
 }
- 
+
 async function sendSpecial(type, content, extra = {}) {
   const { data, error } = await db.from('messages')
     .insert({ sender_id: currentUser.id, type, content, ...extra }).select().single();
   if (!error && data) { renderMessage(data); scrollToBottom(); }
 }
- 
+
 // ── Realtime ───────────────────────────────────
 function subscribeRealtime() {
   if (realtimeSub) { db.removeChannel(realtimeSub); realtimeSub = null; }
@@ -635,7 +738,7 @@ function subscribeRealtime() {
     })
     .subscribe();
 }
- 
+
 function subscribeTypingChannel() {
   if (typingChannel) { db.removeChannel(typingChannel); typingChannel = null; }
   typingChannel = db.channel('our-space-typing');
@@ -645,7 +748,7 @@ function subscribeTypingChannel() {
       payload.is_typing ? showTypingUI() : hideTypingUI();
     }).subscribe();
 }
- 
+
 function showTypingUI() {
   document.getElementById('typing-indicator').classList.add('show');
   scrollToBottom(); clearTimeout(window._typingHide);
@@ -655,7 +758,7 @@ function hideTypingUI() {
   document.getElementById('typing-indicator').classList.remove('show');
   clearTimeout(window._typingHide);
 }
- 
+
 async function handleTyping(el) {
   autoResize(el);
   if (typingChannel && currentUser) {
@@ -670,7 +773,7 @@ function clearTypingFlag() {
   }
   clearTimeout(typingTimeout);
 }
- 
+
 // ── Affection ──────────────────────────────────
 async function sendHug() {
   if (navigator.vibrate) navigator.vibrate([100,50,100,50,200]);
@@ -683,7 +786,7 @@ async function sendHeartbeat() {
 async function sendGesture(type, emoji, label) {
   await sendSpecial(type, emoji); showToast(emoji, label + '!');
 }
- 
+
 // ── Mood ───────────────────────────────────────
 function openMoodModal() { openModal('mood-modal'); }
 async function selectMood(key, label, emoji) {
@@ -692,7 +795,7 @@ async function selectMood(key, label, emoji) {
   await sendSpecial('affection', `${emoji} feeling ${label.toLowerCase()}`);
   showToast(emoji, `mood set to ${label.toLowerCase()}`);
 }
- 
+
 // ── Daily Prompt ───────────────────────────────
 function openDailyPrompt() {
   promptIndex = Math.floor(Math.random() * PROMPTS.length);
@@ -708,7 +811,7 @@ async function sendPromptAsMessage() {
   await sendSpecial('affection', `✦ ${PROMPTS[promptIndex]}`);
   showToast('✦','spark sent!');
 }
- 
+
 // ── Voice Notes ────────────────────────────────
 async function toggleVoiceRecord() {
   if (mediaRecorder) { cancelRecording(); return; }
@@ -726,7 +829,7 @@ async function toggleVoiceRecord() {
     }, 1000);
   } catch(e) { showToast('⚠️','Mic access denied'); }
 }
- 
+
 async function stopAndSendRecording() {
   if (!mediaRecorder) return;
   clearInterval(recInterval); closeModal('voice-modal');
@@ -755,7 +858,7 @@ function playVoice(url, btn) {
   audio.play().catch(() => showToast('⚠️','Could not play audio'));
   audio.onended = () => { btn.innerHTML='<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'; currentAudio=null; };
 }
- 
+
 // ── Push Notifications ─────────────────────────
 async function requestPushPermission() {
   if (!('Notification' in window)) return;
@@ -781,7 +884,7 @@ function triggerNotification(msg) {
     navigator.serviceWorker.controller.postMessage({ type:'SHOW_NOTIFICATION', title:'Our Space 💛', ...opts });
   } else { try { new Notification('Our Space 💛', opts); } catch(e){} }
 }
- 
+
 // ── UI Helpers ─────────────────────────────────
 function handleInputKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,110)+'px'; }
@@ -816,7 +919,7 @@ function scrollToBottom(instant=false) {
   if (instant) { a.scrollTop=a.scrollHeight; return; }
   setTimeout(()=>a.scrollTo({top:a.scrollHeight,behavior:'smooth'}),60);
 }
- 
+
 // ── iOS keyboard fix ───────────────────────────
 (function iosKeyboardFix() {
   if (!window.visualViewport) return;
@@ -832,11 +935,11 @@ function scrollToBottom(instant=false) {
   window.visualViewport.addEventListener('resize',onVpChange);
   window.visualViewport.addEventListener('scroll',onVpChange);
 })();
- 
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
- 
+
 // Pre-fill "your name" on setup screen from auth metadata
 const _origShowScreen = showScreen;
 showScreen = function(id) {
@@ -852,4 +955,315 @@ showScreen = function(id) {
     prefillSetupFromInvite();
   }
 };
- 
+
+// ═══════════════════════════════════════════════════════════════
+//  FEATURE: SWIPE-TO-REPLY
+// ═══════════════════════════════════════════════════════════════
+let _replyTarget = null; // { id, sender_id, content, type }
+
+function attachSwipeReply(wrap, msg) {
+  let startX = 0, currentX = 0, swiping = false;
+  const isMine = msg.sender_id === currentUser.id;
+  const THRESHOLD = 60;
+
+  function onStart(e) {
+    const t = e.touches ? e.touches[0] : e;
+    startX = t.clientX; swiping = true; currentX = 0;
+  }
+  function onMove(e) {
+    if (!swiping) return;
+    const t = e.touches ? e.touches[0] : e;
+    const dx = t.clientX - startX;
+    // Mine: swipe left (negative); Theirs: swipe right (positive)
+    const dir = isMine ? -dx : dx;
+    if (dir < 0) return;
+    currentX = Math.min(dir, THRESHOLD + 20);
+    const bubble = wrap.querySelector('.bubble');
+    const progress = Math.min(currentX / THRESHOLD, 1);
+    bubble.style.transform = isMine
+      ? `translateX(${-currentX * 0.5}px)`
+      : `translateX(${currentX * 0.5}px)`;
+    if (progress > 0.3) wrap.classList.add('swiping');
+    else wrap.classList.remove('swiping');
+    if (e.cancelable) e.preventDefault();
+  }
+  function onEnd() {
+    if (!swiping) return;
+    swiping = false;
+    const bubble = wrap.querySelector('.bubble');
+    bubble.style.transform = '';
+    wrap.classList.remove('swiping');
+    if (currentX >= THRESHOLD) {
+      triggerReply(msg);
+      if (navigator.vibrate) navigator.vibrate(40);
+    }
+    currentX = 0;
+  }
+
+  wrap.addEventListener('touchstart', onStart, { passive: true });
+  wrap.addEventListener('touchmove',  onMove,  { passive: false });
+  wrap.addEventListener('touchend',   onEnd,   { passive: true });
+}
+
+function triggerReply(msg) {
+  _replyTarget = msg;
+  const isMine = msg.sender_id === currentUser.id;
+  const who = isMine ? 'You' : (userProfile?.partner_name || 'Babe');
+  const preview = msg.type === 'voice' ? '🎙 Voice note'
+                : msg.type === 'image' ? '🖼 Image'
+                : msg.type === 'sticker' ? msg.content
+                : (msg.content || '').slice(0, 60);
+  document.getElementById('reply-who').textContent = who + ':';
+  document.getElementById('reply-text-preview').textContent = preview;
+  document.getElementById('reply-preview').classList.add('show');
+  document.getElementById('msg-input').focus();
+}
+
+function cancelReply() {
+  _replyTarget = null;
+  document.getElementById('reply-preview').classList.remove('show');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FEATURE: LONG-PRESS CONTEXT MENU (reply / copy / edit / delete)
+// ═══════════════════════════════════════════════════════════════
+let _ctxMsg = null;
+let _longPressTimer = null;
+
+function attachLongPress(wrap, msg) {
+  function show(clientX, clientY) {
+    _ctxMsg = msg;
+    const menu  = document.getElementById('ctx-menu');
+    const isMine = msg.sender_id === currentUser.id;
+
+    // Show/hide edit & delete only for own messages
+    document.getElementById('ctx-edit').style.display   = isMine && msg.type === 'text' ? '' : 'none';
+    document.getElementById('ctx-delete').style.display = isMine ? '' : 'none';
+    document.getElementById('ctx-copy').style.display   = ['text','affection'].includes(msg.type) ? '' : 'none';
+
+    // Position near the tap
+    menu.style.display = 'flex'; // briefly show to get dimensions
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let x = clientX - mw / 2, y = clientY - mh - 12;
+    x = Math.max(8, Math.min(x, vw - mw - 8));
+    y = Math.max(8, Math.min(y, vh - mh - 8));
+    menu.style.left = x + 'px'; menu.style.top = y + 'px';
+    menu.classList.add('show');
+
+    if (navigator.vibrate) navigator.vibrate(50);
+  }
+
+  // Touch long press
+  wrap.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    _longPressTimer = setTimeout(() => show(t.clientX, t.clientY), 480);
+  }, { passive: true });
+  wrap.addEventListener('touchend',   () => clearTimeout(_longPressTimer), { passive: true });
+  wrap.addEventListener('touchmove',  () => clearTimeout(_longPressTimer), { passive: true });
+
+  // Desktop right-click
+  wrap.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    show(e.clientX, e.clientY);
+  });
+}
+
+function closeCtxMenu() { document.getElementById('ctx-menu').classList.remove('show'); }
+document.addEventListener('click', e => {
+  if (!e.target.closest('#ctx-menu')) closeCtxMenu();
+});
+document.addEventListener('touchstart', e => {
+  if (!e.target.closest('#ctx-menu')) closeCtxMenu();
+}, { passive: true });
+
+async function ctxAction(action) {
+  closeCtxMenu();
+  if (!_ctxMsg) return;
+  const msg = _ctxMsg;
+
+  if (action === 'reply') {
+    triggerReply(msg);
+  }
+
+  if (action === 'copy') {
+    const text = msg.content || '';
+    try { await navigator.clipboard.writeText(text); showToast('⎘', 'Copied!'); }
+    catch(_) { showToast('⚠️', 'Could not copy'); }
+  }
+
+  if (action === 'edit') {
+    const bubble = document.querySelector(`.bubble-wrap[data-id="${msg.id}"] .bubble`);
+    if (!bubble) return;
+    bubble.contentEditable = 'true';
+    bubble.classList.add('editing');
+    bubble.focus();
+    // Move cursor to end
+    const range = document.createRange(); range.selectNodeContents(bubble);
+    range.collapse(false);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+
+    function finishEdit(e) {
+      if ((e.type === 'keydown' && e.key === 'Enter' && !e.shiftKey) || e.type === 'blur') {
+        if (e.type === 'keydown') e.preventDefault();
+        bubble.contentEditable = 'false';
+        bubble.classList.remove('editing');
+        bubble.removeEventListener('keydown', finishEdit);
+        bubble.removeEventListener('blur', finishEdit);
+        const newText = bubble.innerText.trim();
+        if (newText && newText !== msg.content) {
+          saveEdit(msg.id, newText, bubble);
+        }
+      }
+    }
+    bubble.addEventListener('keydown', finishEdit);
+    bubble.addEventListener('blur',    finishEdit);
+  }
+
+  if (action === 'delete') {
+    // Optimistic remove
+    const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
+    if (wrap) wrap.style.opacity = '0.4';
+    const { error } = await db.from('messages').delete().eq('id', msg.id).eq('sender_id', currentUser.id);
+    if (error) {
+      if (wrap) wrap.style.opacity = '';
+      showToast('⚠️', 'Could not delete');
+    } else {
+      if (wrap) wrap.remove();
+    }
+  }
+}
+
+async function saveEdit(id, newText, bubbleEl) {
+  const { error } = await db.from('messages')
+    .update({ content: newText, edited: true })
+    .eq('id', id).eq('sender_id', currentUser.id);
+  if (error) { showToast('⚠️','Edit failed'); return; }
+  bubbleEl.textContent = newText;
+  // Add / update edited label in meta
+  const wrap   = bubbleEl.closest('.bubble-wrap');
+  let edited   = wrap?.querySelector('.edited-label');
+  if (!edited) {
+    edited = document.createElement('span');
+    edited.className = 'edited-label';
+    edited.textContent = 'edited';
+    const meta = wrap?.querySelector('.bubble-meta');
+    if (meta) meta.insertBefore(edited, meta.firstChild);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FEATURE: IMAGE SENDING
+// ═══════════════════════════════════════════════════════════════
+let _pendingImageFile = null;
+
+function triggerImagePick() {
+  document.getElementById('img-file-input').click();
+}
+
+function onImageSelected(e) {
+  const file = e.target.files[0];
+  e.target.value = ''; // reset so same file can be picked again
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { showToast('⚠️', 'Please pick an image'); return; }
+  if (file.size > 8 * 1024 * 1024) { showToast('⚠️', 'Image too large (max 8 MB)'); return; }
+
+  _pendingImageFile = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('img-preview-thumb').src = ev.target.result;
+    document.getElementById('img-preview-wrap').classList.add('show');
+  };
+  reader.readAsDataURL(file);
+}
+
+function cancelImageSend() {
+  _pendingImageFile = null;
+  document.getElementById('img-preview-wrap').classList.remove('show');
+  document.getElementById('img-preview-thumb').src = '';
+}
+
+async function sendImageMessage() {
+  if (!_pendingImageFile) return;
+  const file = _pendingImageFile;
+  cancelImageSend();
+  showToast('🖼', 'Uploading image…');
+
+  const ext      = file.name.split('.').pop() || 'jpg';
+  const filename = `img_${Date.now()}_${currentUser.id.slice(0,8)}.${ext}`;
+
+  const { error: upErr } = await db.storage
+    .from('images')
+    .upload(filename, file, { contentType: file.type, upsert: false });
+
+  if (upErr) {
+    showToast('⚠️', 'Upload failed — create an "images" bucket in Storage');
+    console.error(upErr); return;
+  }
+
+  const { data: urlData } = db.storage.from('images').getPublicUrl(filename);
+  const extra = _replyTarget ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) } : {};
+  cancelReply();
+  await sendSpecial('image', urlData.publicUrl, extra);
+}
+
+function openImgViewer(src) {
+  document.getElementById('img-viewer-img').src = src;
+  document.getElementById('img-viewer').classList.add('show');
+}
+function closeImgViewer() { document.getElementById('img-viewer').classList.remove('show'); }
+
+// ═══════════════════════════════════════════════════════════════
+//  FEATURE: STICKER PICKER
+// ═══════════════════════════════════════════════════════════════
+const STICKER_CATS = [
+  // 0 — Love
+  ['💛','❤️','🧡','💜','💙','🖤','💚','🤍','💕','💞','💓','💗','💘','💝','💖','🫶','💋','😘','🥰','😍'],
+  // 1 — Cute faces
+  ['🥺','🥹','😊','🤭','🫣','😌','😏','🥲','😂','🤣','😭','😅','😇','🤩','😜','🫠','🤗','🤔','😴','🫡'],
+  // 2 — Night & moon
+  ['🌙','✨','🌟','💫','⭐','🌠','🌌','🌃','🌆','🌉','🕯','🪔','💤','😴','🌛','🌜','🌝','☁️','🌧','⛈'],
+  // 3 — Nature & romance
+  ['🌸','🌷','🌹','🌺','🌻','💐','🍀','🌿','🍃','🌱','🦋','🐝','🌈','☀️','🌊','🏖','🫧','🍓','🍑','🍒'],
+  // 4 — Fun
+  ['🎉','🎊','🎈','🎀','🎁','🏆','🥇','👑','💎','🔮','🪄','🎶','🎵','🎸','🎹','🎤','🎧','📸','🍕','🍔'],
+];
+
+function showStickerCat(idx, btn) {
+  document.querySelectorAll('.sticker-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const grid = document.getElementById('sticker-grid');
+  grid.innerHTML = STICKER_CATS[idx]
+    .map(s => `<div class="sticker-item" onclick="sendSticker('${s}')">${s}</div>`).join('');
+}
+
+function toggleStickerPicker() {
+  const picker = document.getElementById('sticker-picker');
+  const isOpen = picker.classList.contains('show');
+  picker.classList.toggle('show');
+  closeEmojiPicker();
+  if (!isOpen) {
+    // populate first category on open
+    const firstTab = document.querySelector('.sticker-tab');
+    if (firstTab && !document.getElementById('sticker-grid').children.length) {
+      showStickerCat(0, firstTab);
+    }
+  }
+}
+
+function closeStickerPicker() { document.getElementById('sticker-picker').classList.remove('show'); }
+
+async function sendSticker(emoji) {
+  closeStickerPicker();
+  const extra = _replyTarget ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) } : {};
+  cancelReply();
+  await sendSpecial('sticker', emoji, extra);
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+// Close sticker picker on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('#sticker-picker') && !e.target.closest('#sticker-btn')) {
+    closeStickerPicker();
+  }
+});
