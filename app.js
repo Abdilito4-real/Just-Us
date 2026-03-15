@@ -51,6 +51,81 @@ let notifSound       = null;
 let currentAudio     = null;
 let _appBooted       = false; // prevents double-init
 
+// ═══════════════════════════════════════════════════════════════
+//  LOADER ENGINE — step-by-step progress feedback
+// ═══════════════════════════════════════════════════════════════
+const LD_STEPS = [
+  { pct: 0,   label: 'Starting up…'              },  // 0 — initial
+  { pct: 18,  label: 'Checking your session…'    },  // 1
+  { pct: 38,  label: 'Restoring your profile…'   },  // 2
+  { pct: 58,  label: 'Connecting to your space…' },  // 3
+  { pct: 80,  label: 'Loading messages…'         },  // 4
+  { pct: 100, label: 'Almost there ✦'            },  // 5
+];
+
+let _ldCurrent = 0;
+let _ldPctDisplayed = 0;
+let _ldAnimFrame = null;
+
+function ldStep(idx) {
+  if (idx === _ldCurrent && idx !== 0) return;
+  _ldCurrent = Math.min(idx, LD_STEPS.length - 1);
+  const step = LD_STEPS[_ldCurrent];
+
+  const textEl = document.getElementById('ld-step-text');
+  const pctEl  = document.getElementById('ld-step-pct');
+  const barEl  = document.getElementById('ld-bar');
+
+  if (textEl) {
+    textEl.style.opacity = '0';
+    setTimeout(() => {
+      textEl.textContent  = step.label;
+      textEl.style.opacity = '1';
+    }, 180);
+  }
+  if (barEl) barEl.style.width = step.pct + '%';
+
+  // Animate percentage counter smoothly
+  const target = step.pct;
+  if (_ldAnimFrame) cancelAnimationFrame(_ldAnimFrame);
+  function tick() {
+    if (_ldPctDisplayed < target) {
+      _ldPctDisplayed = Math.min(_ldPctDisplayed + 2, target);
+      if (pctEl) pctEl.textContent = _ldPctDisplayed + '%';
+      _ldAnimFrame = requestAnimationFrame(tick);
+    }
+  }
+  tick();
+
+  // Update dots
+  for (let i = 0; i < LD_STEPS.length; i++) {
+    const dot = document.getElementById('ld-dot-' + i);
+    if (!dot) continue;
+    if (i < _ldCurrent)       { dot.className = 'ld-dot done';   }
+    else if (i === _ldCurrent) { dot.className = 'ld-dot active'; }
+    else                       { dot.className = 'ld-dot';        }
+  }
+}
+
+function ldDone(callback) {
+  ldStep(5);
+  setTimeout(() => {
+    const screen = document.getElementById('loading-screen');
+    if (screen) {
+      screen.classList.add('exiting');
+      setTimeout(() => {
+        if (callback) callback();
+      }, 480);
+    } else {
+      if (callback) callback();
+    }
+  }, 420);
+}
+
+// Kick off step 1 immediately on script load
+ldStep(1);
+
+
 // ── Suppress residual AbortError from supabase-js internals ─────────────
 // Even with custom storage, the library may fire one AbortError on first
 // load from a stale lock state. Catch it here so it never appears in console.
@@ -141,18 +216,20 @@ db.auth.onAuthStateChange(async (event, session) => {
     if (session?.user) {
       // Valid stored session restored — boot app
       if (_appBooted && currentUser?.id === session.user.id) return;
+      ldStep(2); // "Restoring your profile…"
       currentUser = session.user;
       _appBooted  = true;
       await loadProfile();
     } else {
       // No session at all — show login (not a flash, genuinely logged out)
-      showScreen('auth-screen');
+      ldDone(() => showScreen('auth-screen'));
     }
   }
 
   if (event === 'SIGNED_IN') {
     if (_appBooted && currentUser?.id === session?.user?.id) return;
     if (session?.user) {
+      ldStep(2); // "Restoring your profile…"
       currentUser = session.user;
       _appBooted  = true;
       await loadProfile();
@@ -333,13 +410,14 @@ async function loadProfile() {
   // Check if setup is complete (has partner linked)
   if (!userProfile.partner_email) {
     prefillSetupFromInvite(); // check URL for invite params
-    showScreen('setup-screen');
+    ldDone(() => showScreen('setup-screen'));
     return;
   }
 
+  ldStep(3); // "Connecting to your space…"
   await loadPartnerProfile();
   showScreen('app-screen');
-  initApp();
+  await initApp();
 }
 
 // ── Setup screen helpers ──────────────────────
@@ -441,6 +519,7 @@ function updatePartnerUI() {
 async function initApp() {
   updatePartnerUI();
   setupDateDivider();
+  ldStep(4); // "Loading messages…"
   await loadMessages();
   subscribeRealtime();
   subscribeTypingChannel();
@@ -449,6 +528,10 @@ async function initApp() {
   requestPushPermission();
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
+  // Step 5: animate to 100% then fade out the loader
+  ldDone(() => {
+    // Loader has faded — app-screen is already visible, nothing else needed
+  });
 }
 
 function handleVisibility()      { updatePresence(document.hidden ? 'away' : 'online'); }
