@@ -355,9 +355,18 @@
     }
     .bubble-wrap.mine  .bubble-meta { justify-content: flex-end; }
     .bubble-wrap.theirs .bubble-meta { justify-content: flex-start; }
-    .read-tick { display: flex; align-items: center; line-height: 1; }
-    .read-tick.sent  svg path { stroke: #555; }
-    .read-tick.read  svg path { stroke: var(--gold); }
+    .read-tick {
+      display: flex; align-items: center; line-height: 1;
+      transition: opacity 0.2s;
+    }
+    /* single grey = sent to server */
+    .read-tick.sent       svg path { stroke: #555; }
+    /* double grey = delivered to device */
+    .read-tick.delivered  svg path { stroke: #777; }
+    /* double gold = partner read it */
+    .read-tick.read       svg path { stroke: var(--gold); }
+    /* subtle glow on read */
+    .read-tick.read svg { filter: drop-shadow(0 0 2px rgba(212,175,55,0.5)); }
     /* Day separator override for dynamically inserted ones */
     .day-sep { margin: 0.5rem 0; }
 
@@ -388,69 +397,101 @@
     .typing-indicator span:nth-child(2){ animation-delay: 0.2s; }
     .typing-indicator span:nth-child(3){ animation-delay: 0.4s; }
 
-    /* Input */
+    /* ════════════════════════════════════════════════════════
+       INPUT AREA — WhatsApp-style single row
+       [emoji] [attach] [sticker]  [  textarea  ]  [mic/send]
+       • mic button becomes send when text is typed
+       • everything on one line, fits any phone width
+       ════════════════════════════════════════════════════════ */
     .input-area {
-      /* Safe area bottom so input bar sits above home indicator.
-         --keyboard-offset is set dynamically by JS when iOS keyboard opens. */
-      padding: 0.75rem 0.9rem calc(0.75rem + var(--sab) + var(--keyboard-offset, 0px));
+      padding: 0.55rem 0.75rem calc(0.55rem + var(--sab) + var(--keyboard-offset, 0px));
       border-top: 1px solid var(--border);
-      background: var(--bg); display: flex; align-items: flex-end; gap: 0.55rem;
+      background: var(--bg);
+      display: flex; align-items: flex-end; gap: 0.35rem;
       flex-shrink: 0; position: relative;
+      width: 100%; box-sizing: border-box;
     }
+
+    /* Small icon buttons on left of textarea */
+    .inp-icon-btn {
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none;
+      width: 40px; height: 44px; border-radius: 10px;
+      cursor: pointer; color: var(--text-dim); flex-shrink: 0;
+      transition: color 0.18s, background 0.18s;
+      -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none;
+    }
+    .inp-icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
+    .inp-icon-btn:hover, .inp-icon-btn:active { color: var(--gold); background: var(--gold-soft); }
+    .inp-icon-btn.active { color: var(--gold); }
+
+    /* Attach button shown inside the pill, right of textarea */
+    .inp-attach-btn {
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none; flex-shrink: 0;
+      width: 30px; height: 30px; cursor: pointer; color: var(--text-dim);
+      transition: color 0.18s; -webkit-appearance: none; padding: 0;
+      align-self: center;
+    }
+    .inp-attach-btn svg { width: 20px; height: 20px; fill: currentColor; }
+    .inp-attach-btn:hover { color: var(--gold); }
+
+    /* Textarea pill */
     .input-wrap {
       flex: 1; background: var(--surface); border: 1px solid var(--border);
       border-radius: 22px; display: flex; align-items: flex-end;
-      padding: 0.48rem 0.8rem; gap: 0.4rem; transition: border-color 0.2s;
+      padding: 0.55rem 0.55rem 0.55rem 1rem;
+      transition: border-color 0.2s; min-width: 0; gap: 0.2rem;
     }
-    .input-wrap:focus-within { border-color: rgba(212,175,55,0.4); }
+    .input-wrap:focus-within { border-color: rgba(212,175,55,0.35); }
     .msg-input {
       flex: 1; border: none; background: transparent; color: var(--text);
       font-family: 'DM Sans', sans-serif;
-      /* IMPORTANT: font-size must be >= 16px on iOS to prevent auto-zoom on focus */
-      font-size: 1rem;
-      font-weight: 300;
-      resize: none; outline: none; max-height: 110px; line-height: 1.5;
-      /* Remove iOS default appearance */
-      -webkit-appearance: none;
-      appearance: none;
+      font-size: 1rem; font-weight: 300;
+      resize: none; outline: none; max-height: 120px; line-height: 1.5;
+      -webkit-appearance: none; appearance: none;
+      width: 100%; min-width: 0; align-self: center;
     }
     .msg-input::placeholder { color: var(--text-faint); }
-    .emoji-btn {
-      background: transparent; border: none; color: var(--text-dim);
-      cursor: pointer; font-size: 1.05rem; padding: 0.2rem; line-height: 1;
-      transition: color 0.2s; align-self: center;
-      -webkit-appearance: none; appearance: none;
-      -webkit-touch-callout: none;
-    }
-    .emoji-btn:hover { color: var(--gold); }
-    .send-btn, .voice-btn {
-      width: 40px; height: 40px; border-radius: 50%; border: none;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all 0.2s;
-      -webkit-appearance: none; appearance: none;
-      -webkit-touch-callout: none;
-      /* Enlarge tap target to 44pt min (Apple HIG) */
-      min-width: 44px; min-height: 44px;
-    }
-    .send-btn { background: var(--gold); color: #0a0a0a; }
-    .send-btn:hover { opacity: 0.83; transform: scale(1.05); }
-    .send-btn:active { transform: scale(0.95); }
-    .send-btn svg { width: 17px; height: 17px; fill: currentColor; }
-    .voice-btn { background: var(--surface); border: 1px solid var(--border); color: var(--gold); }
-    .voice-btn:hover { background: var(--gold-soft); }
-    .voice-btn svg { width: 16px; height: 16px; fill: currentColor; }
-    .voice-btn.recording { background: rgba(220,60,60,0.12); border-color: rgba(220,60,60,0.35); color: #f87171; animation: record-pulse 1s ease-in-out infinite; }
 
-    /* Emoji picker */
+    /* Right-side action button: MIC or SEND */
+    .inp-action-btn {
+      width: 46px; height: 46px; border-radius: 50%; border: none;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none; position: relative; overflow: hidden;
+    }
+    /* Mic state (default) */
+    .inp-action-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--gold); }
+    .inp-action-btn:active { transform: scale(0.93); }
+    .inp-action-btn svg { width: 20px; height: 20px; fill: currentColor;
+      position: absolute; transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1), opacity 0.18s; }
+    /* Mic icon shown by default */
+    .inp-action-btn .icon-mic  { transform: scale(1);   opacity: 1; }
+    .inp-action-btn .icon-send { transform: scale(0.3); opacity: 0; }
+    /* Send state — when textarea has text */
+    .inp-action-btn.send-mode  { background: var(--gold); color: #0a0a0a; border-color: var(--gold); }
+    .inp-action-btn.send-mode .icon-mic  { transform: scale(0.3); opacity: 0; }
+    .inp-action-btn.send-mode .icon-send { transform: scale(1);   opacity: 1; }
+    /* Recording state */
+    .inp-action-btn.recording { background: rgba(220,60,60,0.12); border-color: rgba(220,60,60,0.35); color: #f87171; animation: record-pulse 1s ease-in-out infinite; }
+    .inp-action-btn.recording .icon-mic { animation: none; }
+
+    /* Keep old refs hidden */
+    .voice-btn, .emoji-btn, .send-btn,
+    .input-toolbar, .input-compose, .toolbar-btn, .toolbar-sep { display: none !important; }
+
+    /* Emoji picker — slides above toolbar */
     .emoji-picker {
-      position: absolute; bottom: 68px; left: 0.9rem; right: 0.9rem;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 0.7rem;
-      flex-wrap: wrap; gap: 0.45rem; z-index: 100; display: none;
+      display: none; flex-wrap: wrap; gap: 0.45rem;
+      padding: 0.7rem 0.9rem;
+      background: var(--surface); border-top: 1px solid var(--border);
+      animation: slide-down 0.18s ease;
     }
     .emoji-picker.show { display: flex; }
-    .emoji-picker span { font-size: 1.35rem; cursor: pointer; transition: transform 0.15s; }
-    .emoji-picker span:hover { transform: scale(1.3); }
+    .emoji-picker span { font-size: 1.45rem; cursor: pointer; transition: transform 0.15s; }
+    .emoji-picker span:hover, .emoji-picker span:active { transform: scale(1.25); }
 
     /* Modals */
     .modal-overlay {
@@ -641,38 +682,6 @@
       line-height: 1;
     }
 
-    /* ── STICKER PICKER ── */
-    .sticker-picker {
-      position: absolute; bottom: 68px; left: 0.9rem; right: 0.9rem;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); z-index: 101; display: none;
-      flex-direction: column; overflow: hidden;
-    }
-    .sticker-picker.show { display: flex; }
-    .sticker-tabs {
-      display: flex; gap: 0; border-bottom: 1px solid var(--border);
-      overflow-x: auto; scrollbar-width: none;
-    }
-    .sticker-tabs::-webkit-scrollbar { display: none; }
-    .sticker-tab {
-      flex: 1; min-width: 44px; padding: 0.5rem;
-      background: transparent; border: none; font-size: 1.15rem;
-      cursor: pointer; transition: background 0.15s;
-      border-bottom: 2px solid transparent;
-    }
-    .sticker-tab.active { border-bottom-color: var(--gold); background: var(--gold-soft); }
-    .sticker-tab:hover  { background: var(--gold-soft); }
-    .sticker-grid {
-      display: grid; grid-template-columns: repeat(8, 1fr);
-      gap: 2px; padding: 0.5rem; max-height: 160px; overflow-y: auto;
-      scrollbar-width: thin; scrollbar-color: var(--border) transparent;
-    }
-    .sticker-item {
-      font-size: 1.55rem; text-align: center; cursor: pointer;
-      padding: 0.2rem; border-radius: 8px; transition: background 0.12s, transform 0.1s;
-      line-height: 1;
-    }
-    .sticker-item:hover  { background: var(--gold-soft); }
     .sticker-item:active { transform: scale(0.88); }
 
     /* ── CONTEXT MENU ── */
@@ -842,27 +851,51 @@
       cursor: pointer; display: flex; align-items: center; justify-content: center;
     }
 
-    /* image upload preview in input */
+    /* image upload preview — multi strip */
     .img-preview-wrap {
-      display: none; padding: 0.4rem 0.9rem; flex-shrink: 0;
+      display: none; flex-direction: column; gap: 0.4rem;
+      padding: 0.5rem 0.75rem; border-top: 1px solid var(--border);
+      background: var(--bg); flex-shrink: 0;
     }
-    .img-preview-wrap.show { display: flex; gap: 0.5rem; align-items: center; }
+    .img-preview-wrap.show { display: flex; }
+    .img-preview-strip {
+      display: flex; gap: 0.5rem; overflow-x: auto; scrollbar-width: none;
+    }
+    .img-preview-strip::-webkit-scrollbar { display: none; }
+    .img-thumb-item {
+      position: relative; flex-shrink: 0;
+    }
     .img-preview-thumb {
-      width: 54px; height: 54px; border-radius: 10px;
+      width: 72px; height: 72px; border-radius: 12px;
       object-fit: cover; border: 1px solid var(--border);
+      display: block;
     }
-    .img-preview-remove {
-      background: rgba(255,255,255,0.08); border: none; border-radius: 50%;
-      width: 24px; height: 24px; color: var(--text-dim); cursor: pointer;
-      font-size: 0.9rem; display: flex; align-items: center; justify-content: center;
+    .img-thumb-remove {
+      position: absolute; top: -6px; right: -6px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: rgba(20,20,20,0.9); border: 1px solid var(--border);
+      color: #fff; font-size: 0.7rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-appearance: none;
     }
+    .img-preview-actions {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .img-preview-hint { font-size: 0.7rem; color: var(--text-faint); }
+    .img-preview-clear {
+      font-size: 0.72rem; color: var(--text-dim); background: none;
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.2rem 0.6rem; cursor: pointer;
+      -webkit-appearance: none;
+    }
+    .img-preview-clear:hover { color: #f87171; border-color: rgba(248,113,113,0.4); }
 
     /* ── STICKER PICKER ───────────────────────── */
     .sticker-picker {
-      position: absolute; bottom: 68px; left: 0; right: 0;
       background: var(--surface); border-top: 1px solid var(--border);
       padding: 0.75rem; display: none; flex-direction: column; gap: 0.6rem;
-      z-index: 200; max-height: 220px; overflow-y: auto;
+      max-height: 200px; overflow-y: auto;
+      animation: slide-down 0.18s ease;
     }
     .sticker-picker.show { display: flex; }
     .sticker-tabs {
@@ -1083,6 +1116,117 @@
       0%   { opacity: 1; transform: scale(1); }
       100% { opacity: 0; transform: scale(1.04); pointer-events: none; }
     }
+
+    /* ── DELETE CONFIRM MODAL ────────────────── */
+    .delete-modal-overlay {
+      position: fixed; inset: 0; z-index: 3000;
+      background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
+      display: none; align-items: flex-end; justify-content: center;
+      padding-bottom: calc(var(--sab) + 1rem);
+    }
+    .delete-modal-overlay.show { display: flex; }
+    .delete-sheet {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 24px 24px 16px 16px;
+      width: min(380px, calc(100vw - 2rem));
+      padding: 1.4rem 1.2rem 1rem;
+      display: flex; flex-direction: column; gap: 0.65rem;
+      animation: delete-sheet-in 0.28s cubic-bezier(0.34,1.2,0.64,1);
+    }
+    @keyframes delete-sheet-in {
+      from { transform: translateY(60px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    .delete-sheet-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.1rem; font-weight: 400; color: var(--text);
+      text-align: center; margin-bottom: 0.2rem;
+    }
+    .delete-sheet-preview {
+      font-size: 0.78rem; color: var(--text-dim); text-align: center;
+      padding: 0.5rem 0.8rem; background: var(--surface2);
+      border-radius: 10px; border: 1px solid var(--border);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .delete-opt {
+      display: flex; align-items: center; gap: 0.75rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.9rem 1rem;
+      cursor: pointer; transition: all 0.18s;
+      font-family: 'DM Sans', sans-serif; font-size: 0.88rem;
+      color: var(--text); text-align: left; width: 100%;
+      -webkit-appearance: none; appearance: none;
+    }
+    .delete-opt:hover, .delete-opt:active {
+      border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.06);
+      color: #f87171;
+    }
+    .delete-opt .do-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .delete-opt .do-label { flex: 1; }
+    .delete-opt .do-sub {
+      font-size: 0.72rem; color: var(--text-faint); display: block; margin-top: 1px;
+    }
+    .delete-cancel {
+      background: transparent; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.8rem;
+      font-family: 'DM Sans', sans-serif; font-size: 0.85rem;
+      color: var(--text-dim); cursor: pointer; transition: all 0.18s;
+      -webkit-appearance: none; width: 100%;
+      margin-top: 0.1rem;
+    }
+    .delete-cancel:hover { border-color: var(--gold-border, var(--border)); color: var(--text); }
+
+    /* ── DELETED MESSAGE PLACEHOLDER ─────────── */
+    .bubble.deleted {
+      background: transparent !important;
+      border: 1px dashed rgba(255,255,255,0.12) !important;
+      color: var(--text-faint) !important;
+      font-style: italic; font-size: 0.8rem;
+      padding: 0.5rem 0.85rem !important;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .bubble-wrap.mine .bubble.deleted {
+      border-color: rgba(212,175,55,0.15) !important;
+    }
+    .deleted-icon { opacity: 0.5; font-size: 0.9rem; }
+
+    /* ── Multi-image grid bubble ───────────────── */
+    .bubble.multi-img-bubble {
+      padding: 0 !important; overflow: hidden;
+      background: transparent !important;
+      border: none !important; max-width: 240px;
+    }
+    .img-grid {
+      display: grid; gap: 2px; border-radius: 16px; overflow: hidden;
+    }
+    .img-grid img {
+      width: 100%; aspect-ratio: 1; object-fit: cover;
+      display: block; cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .img-grid img:hover { opacity: 0.9; }
+    /* 1 image */
+    .img-grid-1 { grid-template-columns: 1fr; }
+    .img-grid-1 img { max-width: 200px; aspect-ratio: 4/3; }
+    /* 2 images */
+    .img-grid-2 { grid-template-columns: 1fr 1fr; }
+    /* 3 images */
+    .img-grid-3 { grid-template-columns: 1fr 1fr; }
+    .img-grid-3 img:first-child { grid-column: 1 / -1; aspect-ratio: 16/9; }
+    /* 4+ images */
+    .img-grid-4 { grid-template-columns: 1fr 1fr; }
+    .img-grid-more {
+      position: relative; cursor: pointer;
+    }
+    .img-grid-more img {
+      width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+      filter: brightness(0.45);
+    }
+    .img-grid-more span {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 1.4rem; font-weight: 500;
+    }
   </style>
 </head>
 <body>
@@ -1245,60 +1389,86 @@
     <button class="reply-cancel" onclick="cancelReply()">✕</button>
   </div>
 
-  <!-- IMAGE PREVIEW (before sending) -->
+  <!-- IMAGE PREVIEW (multi-image strip) -->
   <div class="img-preview-wrap" id="img-preview-wrap">
-    <img class="img-preview-thumb" id="img-preview-thumb" src="" alt="" />
-    <button class="img-preview-remove" onclick="cancelImageSend()">✕</button>
-    <span style="font-size:0.75rem;color:var(--text-dim)">tap send to share</span>
+    <div class="img-preview-strip" id="img-preview-strip"></div>
+    <div class="img-preview-actions">
+      <span class="img-preview-hint">tap ✕ to remove · send to share all</span>
+      <button class="img-preview-clear" onclick="cancelImageSend()">Clear all</button>
+    </div>
   </div>
 
-  <div class="input-area" style="position:relative">
-    <div class="emoji-picker" id="emoji-picker">
-      <span onclick="insertEmoji('❤️')">❤️</span>
-      <span onclick="insertEmoji('😘')">😘</span>
-      <span onclick="insertEmoji('🥰')">🥰</span>
-      <span onclick="insertEmoji('😍')">😍</span>
-      <span onclick="insertEmoji('🌹')">🌹</span>
-      <span onclick="insertEmoji('✨')">✨</span>
-      <span onclick="insertEmoji('🌙')">🌙</span>
-      <span onclick="insertEmoji('💫')">💫</span>
-      <span onclick="insertEmoji('🍀')">🍀</span>
-      <span onclick="insertEmoji('🦋')">🦋</span>
-      <span onclick="insertEmoji('💌')">💌</span>
-      <span onclick="insertEmoji('😂')">😂</span>
-      <span onclick="insertEmoji('🎶')">🎶</span>
-      <span onclick="insertEmoji('☁️')">☁️</span>
-      <span onclick="insertEmoji('🌷')">🌷</span>
-      <span onclick="insertEmoji('💐')">💐</span>
+  <!-- Emoji picker panel -->
+  <div class="emoji-picker" id="emoji-picker">
+    <span onclick="insertEmoji('❤️')">❤️</span>
+    <span onclick="insertEmoji('😘')">😘</span>
+    <span onclick="insertEmoji('🥰')">🥰</span>
+    <span onclick="insertEmoji('😍')">😍</span>
+    <span onclick="insertEmoji('🌹')">🌹</span>
+    <span onclick="insertEmoji('✨')">✨</span>
+    <span onclick="insertEmoji('🌙')">🌙</span>
+    <span onclick="insertEmoji('💫')">💫</span>
+    <span onclick="insertEmoji('🍀')">🍀</span>
+    <span onclick="insertEmoji('🦋')">🦋</span>
+    <span onclick="insertEmoji('💌')">💌</span>
+    <span onclick="insertEmoji('😂')">😂</span>
+    <span onclick="insertEmoji('🎶')">🎶</span>
+    <span onclick="insertEmoji('☁️')">☁️</span>
+    <span onclick="insertEmoji('🌷')">🌷</span>
+    <span onclick="insertEmoji('💐')">💐</span>
+  </div>
+
+  <!-- Sticker picker panel -->
+  <div class="sticker-picker" id="sticker-picker">
+    <div class="sticker-tabs">
+      <button class="sticker-tab active" onclick="showStickerCat(0,this)">💛</button>
+      <button class="sticker-tab" onclick="showStickerCat(1,this)">🥰</button>
+      <button class="sticker-tab" onclick="showStickerCat(2,this)">🌙</button>
+      <button class="sticker-tab" onclick="showStickerCat(3,this)">🌸</button>
+      <button class="sticker-tab" onclick="showStickerCat(4,this)">😂</button>
     </div>
-    <div class="sticker-picker" id="sticker-picker">
-      <div class="sticker-tabs">
-        <button class="sticker-tab active" onclick="showStickerCat(0,this)">💛</button>
-        <button class="sticker-tab" onclick="showStickerCat(1,this)">🥰</button>
-        <button class="sticker-tab" onclick="showStickerCat(2,this)">🌙</button>
-        <button class="sticker-tab" onclick="showStickerCat(3,this)">🌸</button>
-        <button class="sticker-tab" onclick="showStickerCat(4,this)">😂</button>
-      </div>
-      <div class="sticker-grid" id="sticker-grid"></div>
-    </div>
+    <div class="sticker-grid" id="sticker-grid"></div>
+  </div>
+
+  <div class="input-area">
+
+    <!-- Left: Emoji -->
+    <button class="inp-icon-btn" id="emoji-tb-btn" onclick="toggleEmojiPicker()" title="Emoji">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+    </button>
+
+    <!-- Left: Sticker -->
+    <button class="inp-icon-btn" id="sticker-btn" onclick="toggleStickerPicker()" title="Stickers">
+      <svg viewBox="0 0 24 24"><path d="M11.5 2C6.81 2 3 5.81 3 10.5S6.81 19 11.5 19h.5v3c4.86-2.34 8-7 8-11.5C20 5.81 16.19 2 11.5 2zm1 14.5h-2v-2h2v2zm0-4h-2c0-3.25 3-3 3-5 0-1.1-.9-2-2-2s-2 .9-2 2h-2c0-2.21 1.79-4 4-4s4 1.79 4 4c0 2.5-3 2.75-3 5z"/></svg>
+    </button>
+
+    <!-- Centre: Pill (textarea + attach icons inside) -->
     <div class="input-wrap">
-      <button class="emoji-btn" onclick="toggleEmojiPicker()" title="Emoji">☺</button>
-      <button class="emoji-btn" onclick="triggerImagePick()" title="Send image" style="font-size:1.15rem">🖼</button>
-      <button class="emoji-btn" onclick="toggleStickerPicker()" title="Stickers" id="sticker-btn" style="font-size:1.1rem">✨</button>
       <textarea
         class="msg-input" id="msg-input"
-        placeholder="say something sweet…"
+        placeholder="Message"
         rows="1"
         onkeydown="handleInputKey(event)"
         oninput="handleTyping(this)"
       ></textarea>
+      <!-- Attach icon inside pill, right side -->
+      <button class="inp-attach-btn" onclick="triggerImagePick()" title="Photo">
+        <svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+      </button>
     </div>
-    <button class="voice-btn" id="voice-btn" onclick="toggleVoiceRecord()">
-      <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+
+    <!-- Right: Mic / Send toggle -->
+    <button class="inp-action-btn" id="action-btn" onclick="handleActionBtn()" title="Voice / Send">
+      <!-- Mic icon -->
+      <svg class="icon-mic" viewBox="0 0 24 24">
+        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+      </svg>
+      <!-- Send icon -->
+      <svg class="icon-send" viewBox="0 0 24 24">
+        <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/>
+      </svg>
     </button>
-    <button class="send-btn" onclick="sendMessage()">
-      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
-    </button>
+
   </div>
 </div>
 
@@ -1371,8 +1541,34 @@
   <button class="ctx-item danger" id="ctx-delete" onclick="ctxAction('delete')">✕ Delete</button>
 </div>
 
+
+<!-- DELETE CONFIRM SHEET -->
+<div class="delete-modal-overlay" id="delete-overlay" onclick="cancelDelete(event)">
+  <div class="delete-sheet">
+    <div class="delete-sheet-title">Delete message?</div>
+    <div class="delete-sheet-preview" id="delete-preview-text"></div>
+
+    <button class="delete-opt" onclick="confirmDelete('me')">
+      <span class="do-icon">🙈</span>
+      <span class="do-label">
+        Delete for me
+        <span class="do-sub">Only you won't see this message anymore</span>
+      </span>
+    </button>
+
+    <button class="delete-opt" id="delete-for-all-btn" onclick="confirmDelete('all')">
+      <span class="do-icon">🗑</span>
+      <span class="do-label">
+        Delete for everyone
+        <span class="do-sub">Removes the message for both of you</span>
+      </span>
+    </button>
+
+    <button class="delete-cancel" onclick="cancelDelete()">Cancel</button>
+  </div>
+</div>
 <!-- Hidden image file input -->
-<input type="file" id="img-file-input" accept="image/*" style="display:none" onchange="onImageSelected(event)" />
+<input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="onImageSelected(event)" />
 
 <script src="app.js"></script>
 </body>
