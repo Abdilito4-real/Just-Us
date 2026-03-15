@@ -1,7 +1,16 @@
-// ═══════════════════════════════════════════════
-//  OUR SPACE — app.js
-//  Set SUPABASE_URL + SUPABASE_ANON_KEY below
-// ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  OUR SPACE
+//  A private real-time chat app for two people
+//
+//  Built by  : Jedderh
+//  Stack     : Vanilla JS · Supabase (Postgres + Realtime)
+//  Features  : Real-time chat · Voice notes · Images
+//              Stickers · Heartbeat/Hug · Mood sharing
+//              Delivery receipts · Swipe-to-reply
+//              Long-press menu · Edit/Delete · PWA
+//
+//  All rights reserved © Jedderh
+// ═══════════════════════════════════════════════════════
 const SUPABASE_URL      = 'https://eekpkpjjdyuzpyxkodhd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVla3BrcGpqZHl1enB5eGtvZGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzYyODAsImV4cCI6MjA4OTE1MjI4MH0.azUzGvPV23FJvb94B_7DELtsn36clxOFun5MnC3ZIto';
 
@@ -624,28 +633,38 @@ async function updatePresence(status) {
 function updatePartnerPresence(status, lastSeenISO) {
   const dot   = document.getElementById('presence-dot');
   const label = document.getElementById('header-status');
-  dot.className = `presence-dot ${status}`;
+
   if (status === 'online') {
-    label.textContent = '● online now'; label.dataset.status = 'online';
-  } else if (status === 'away') {
-    label.textContent = '● away'; label.dataset.status = 'away';
+    dot.className = 'presence-dot online';
+    label.textContent    = 'online now';
+    label.dataset.status = 'online';
   } else {
+    // 'away' = app backgrounded; 'offline' = signed out / not connected
+    // Both show "last seen …" — we never show the word "away" to the user
+    dot.className = 'presence-dot offline';
     label.dataset.status = 'offline';
-    label.textContent = lastSeenISO ? 'last seen ' + formatLastSeen(lastSeenISO) : 'offline';
+    if (lastSeenISO) {
+      label.textContent = 'last seen ' + formatLastSeen(lastSeenISO);
+    } else {
+      label.textContent = 'offline';
+    }
   }
 }
 
 function formatLastSeen(iso) {
   if (!iso) return 'a while ago';
-  const diff  = Date.now() - new Date(iso).getTime();
+  const d     = new Date(iso);
+  const diff  = Date.now() - d.getTime();
   const mins  = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days  = Math.floor(diff / 86400000);
-  if (mins  < 1)  return 'just now';
-  if (mins  < 60) return `${mins} min ago`;
-  if (hours < 24) return `today at ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  if (days === 1) return `yesterday at ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const time  = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (mins  < 1)   return 'just now';
+  if (mins  < 60)  return `${mins}m ago`;
+  if (hours < 24)  return `today at ${time}`;
+  if (days === 1)  return `yesterday at ${time}`;
+  if (days  < 7)   return `${d.toLocaleDateString([], { weekday:'long' })} at ${time}`;
+  return d.toLocaleDateString([], { day:'numeric', month:'short' });
 }
 
 // ── Messages ───────────────────────────────────
@@ -824,34 +843,48 @@ function renderMessage(msg) {
   attachLongPress(wrap, msg);
 }
 
-// ── Three-state ticks: sent | delivered | read ──────────────────
-// sent      = single grey tick     (message reached the server)
-// delivered = double grey tick     (partner's device received it)
-// read      = double gold tick     (partner opened the chat)
+// ══════════════════════════════════════════════════════
+//  THREE-STATE TICK SYSTEM
+//
+//  sent      → single grey checkmark (thin stroke)
+//  delivered → double grey checkmarks (staggered, like WhatsApp)
+//  read      → double gold checkmarks with a soft glow
+//
+//  Design: clean stroke-only marks — no filled circles.
+//  The circles were visually heavy; simple strokes are
+//  faster to read and universally understood.
+// ══════════════════════════════════════════════════════
 function buildTick(state) {
-  // Support legacy boolean call (true=read, false=sent)
   if (state === true)  state = 'read';
   if (state === false) state = 'sent';
 
-  if (state === 'read') {
-    // Double gold — both checks filled gold
-    return `<svg viewBox="0 0 22 13" width="19" height="13">
-      <path d="M1 7l4 4L15 2"   stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M8 11l4-4"        stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round"/>
-      <path d="M12 7l4-4"        stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  // A single checkmark path at a given x-offset and colour
+  // The check goes: bottom-left → mid-bottom → top-right
+  const check = (dx, color, w = 2) =>
+    `<polyline
+       points="${1.5+dx},7 ${5+dx},11 ${12+dx},3"
+       fill="none" stroke="${color}" stroke-width="${w}"
+       stroke-linecap="round" stroke-linejoin="round"/>`;
+
+  if (state === 'sent') {
+    // Single thin check — muted grey
+    return `<svg viewBox="0 0 14 14" width="14" height="14">
+      ${check(0, '#666', 1.9)}
     </svg>`;
   }
+
   if (state === 'delivered') {
-    // Double grey — message reached partner's device
-    return `<svg viewBox="0 0 22 13" width="19" height="13">
-      <path d="M1 7l4 4L15 2"   stroke="#666" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M8 11l4-4"        stroke="#666" fill="none" stroke-width="2" stroke-linecap="round"/>
-      <path d="M12 7l4-4"        stroke="#666" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    // Two overlapping checks — medium grey, second offset right+down
+    return `<svg viewBox="0 0 20 14" width="20" height="14">
+      ${check(0,   '#666', 1.8)}
+      ${check(5.5, '#888', 1.8)}
     </svg>`;
   }
-  // sent — single grey tick
-  return `<svg viewBox="0 0 14 13" width="14" height="13">
-    <path d="M1 7l4 4L13 2" stroke="#555" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  // read — two gold checks, first slightly dimmer for depth
+  return `<svg viewBox="0 0 20 14" width="20" height="14">
+    ${check(0,   'rgba(212,175,55,0.65)', 1.9)}
+    ${check(5.5, 'var(--gold)',           2.1)}
   </svg>`;
 }
 
@@ -872,9 +905,11 @@ function updateTickInUI(msgId, state) {
   if (!wrap) return;
   const tick = wrap.querySelector('.read-tick');
   if (!tick) return;
-  tick.className = `read-tick ${state}`;
+  tick.className = `read-tick ${state} tick-bump`;
   tick.innerHTML = buildTick(state);
   tick.title = state === 'read' ? 'Read' : state === 'delivered' ? 'Delivered' : 'Sent';
+  // Remove bump class after animation so it can retrigger
+  setTimeout(() => tick.classList.remove('tick-bump'), 400);
 }
 // Convenience shims
 function updateReadTickInUI(msgId)      { updateTickInUI(msgId, 'read'); }
@@ -1182,9 +1217,36 @@ function closeEmojiPicker() {
   document.getElementById('emoji-picker').classList.remove('show');
   document.getElementById('emoji-tb-btn')?.classList.remove('active');
 }
-function insertEmoji(e) {
-  const i=document.getElementById('msg-input'), pos=i.selectionStart;
-  i.value=i.value.slice(0,pos)+e+i.value.slice(pos); i.focus(); i.selectionStart=i.selectionEnd=pos+e.length;
+function insertEmoji(emoji) {
+  const input = document.getElementById('msg-input');
+  if (!input) return;
+  const txt = input.value.trim();
+
+  if (!txt) {
+    // Empty input — send the emoji directly as a message
+    closeEmojiPicker();
+    sendEmojiMessage(emoji);
+  } else {
+    // Text present — insert emoji at cursor position
+    const pos = input.selectionStart;
+    input.value = input.value.slice(0, pos) + emoji + input.value.slice(pos);
+    input.focus();
+    input.selectionStart = input.selectionEnd = pos + emoji.length;
+    updateActionBtn();
+  }
+}
+
+async function sendEmojiMessage(emoji) {
+  if (!currentUser) return;
+  clearTypingFlag();
+  const row = { sender_id: currentUser.id, type: 'text', content: emoji };
+  if (_replyTarget) {
+    row.reply_to_id   = _replyTarget.id;
+    row.reply_preview = (_replyTarget.content || '').slice(0, 60);
+    cancelReply();
+  }
+  const { data, error } = await db.from('messages').insert(row).select().single();
+  if (!error && data) { renderMessage(data); scrollToBottom(); }
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('#emoji-tb-btn') && !e.target.closest('.emoji-picker')) closeEmojiPicker();
@@ -1197,6 +1259,8 @@ document.addEventListener('DOMContentLoaded', () => {
     o.addEventListener('click', e => { if (e.target===o) o.classList.remove('show'); })
   );
 });
+function showAbout() { openModal('about-modal'); }
+
 let toastTimer;
 function showToast(icon, text) {
   document.getElementById('toast-icon').textContent=icon; document.getElementById('toast-text').textContent=text;
