@@ -1,12 +1,9 @@
 // ═══════════════════════════════════════════════
-//  OUR SPACE — app.js  (full real-time edition)
-//  1. Set SUPABASE_URL and SUPABASE_ANON_KEY below
-//  2. Run schema.sql in your Supabase SQL editor
-//  3. Create a Storage bucket called "voice-notes"
+//  OUR SPACE — app.js
+//  Set SUPABASE_URL + SUPABASE_ANON_KEY below
 // ═══════════════════════════════════════════════
 const SUPABASE_URL      = 'https://eekpkpjjdyuzpyxkodhd.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVla3BrcGpqZHl1enB5eGtvZGhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzYyODAsImV4cCI6MjA4OTE1MjI4MH0.azUzGvPV23FJvb94B_7DELtsn36clxOFun5MnC3ZIto';
-
 
 const { createClient } = supabase;
 
@@ -593,6 +590,7 @@ async function initApp() {
   requestPushPermission();
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
+  updateActionBtn(); // ensure mic shown on fresh load
   // Step 5: animate to 100% then fade out the loader
   ldDone(() => {
     // Loader has faded — app-screen is already visible, nothing else needed
@@ -691,6 +689,9 @@ function renderMessage(msg) {
   const typing = document.getElementById('typing-indicator');
   if (area.querySelector(`[data-id="${msg.id}"]`)) return;
 
+  // Skip messages soft-deleted just for me (only I won't see them)
+  if (msg.deleted_for_me && isMine) return;
+
   // ── Centred event messages ─────────────────────────────────
   if (['heartbeat','hug','kiss','thinking'].includes(msg.type)) {
     const div = document.createElement('div');
@@ -726,18 +727,55 @@ function renderMessage(msg) {
     bubble.appendChild(quote);
   }
 
+  // ── Deleted for all — show placeholder ──────────────────────
+  if (msg.deleted_for_all) {
+    bubble.className = 'bubble deleted';
+    bubble.innerHTML = `<span class="deleted-icon">🚫</span>${isMine ? 'You deleted this message' : 'This message was deleted'}`;
+    // Build a minimal meta row just for the timestamp
+    const deletedMeta = document.createElement('div'); deletedMeta.className = 'bubble-meta';
+    const deletedTime = document.createElement('span'); deletedTime.className = 'bubble-time';
+    deletedTime.textContent = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    deletedMeta.appendChild(deletedTime);
+    wrap.appendChild(bubble);
+    wrap.appendChild(deletedMeta);
+    area.insertBefore(wrap, typing);
+    return; // no interactions on deleted bubbles
+  }
+
   // ── Bubble content ────────────────────────────────────────
   if (msg.type === 'affection') {
     bubble.className = 'bubble affection-bubble'; bubble.textContent = msg.content;
   } else if (msg.type === 'sticker') {
     bubble.className = 'bubble sticker-bubble'; bubble.textContent = msg.content;
   } else if (msg.type === 'image') {
+    // Single image
     bubble.className = 'bubble img-bubble';
     const img = document.createElement('img');
-    img.src = msg.content; img.alt = 'image';
-    img.loading = 'lazy';
+    img.src = msg.content; img.alt = 'image'; img.loading = 'lazy';
     img.addEventListener('click', () => openImgViewer(msg.content));
     bubble.appendChild(img);
+  } else if (msg.type === 'images') {
+    // Multiple images — grid layout
+    bubble.className = 'bubble multi-img-bubble';
+    let urls = [];
+    try { urls = JSON.parse(msg.content); } catch(_) { urls = [msg.content]; }
+    const grid = document.createElement('div');
+    grid.className = `img-grid img-grid-${Math.min(urls.length, 4)}`;
+    urls.forEach((url, i) => {
+      const img = document.createElement('img');
+      img.src = url; img.alt = `image ${i+1}`; img.loading = 'lazy';
+      img.addEventListener('click', () => openImgViewer(url));
+      if (urls.length > 4 && i === 3) {
+        const more = document.createElement('div');
+        more.className = 'img-grid-more';
+        more.innerHTML = `<img src="${url}" /><span>+${urls.length - 4}</span>`;
+        more.addEventListener('click', () => openImgViewer(url));
+        grid.appendChild(more);
+      } else if (i < 4) {
+        grid.appendChild(img);
+      }
+    });
+    bubble.appendChild(grid);
   } else if (msg.type === 'voice') {
     bubble.className = 'bubble voice-bubble';
     const bars = Array.from({length:7},(_,i)=>`<span style="animation-delay:${i*0.1}s"></span>`).join('');
@@ -769,9 +807,12 @@ function renderMessage(msg) {
 
   if (isMine) {
     const tick = document.createElement('span');
-    tick.className = `read-tick ${msg.read_at ? 'read' : 'sent'}`;
-    tick.innerHTML = buildTick(!!msg.read_at);
-    tick.title     = msg.read_at ? `Read ${formatLastSeen(msg.read_at)}` : 'Sent';
+    const _state = tickState(msg);
+    tick.className = `read-tick ${_state}`;
+    tick.innerHTML = buildTick(_state);
+    tick.title     = _state === 'read'      ? `Read ${formatLastSeen(msg.read_at)}`
+                   : _state === 'delivered' ? `Delivered ${formatLastSeen(msg.delivered_at)}`
+                   : 'Sent';
     meta.appendChild(tick);
   }
 
@@ -783,10 +824,41 @@ function renderMessage(msg) {
   attachLongPress(wrap, msg);
 }
 
-function buildTick(isRead) {
-  return isRead
-    ? `<svg viewBox="0 0 20 12" width="18" height="12"><path d="M1 6l4 4L14 1" stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 10l4-4" stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round"/></svg>`
-    : `<svg viewBox="0 0 14 12" width="14" height="12"><path d="M1 6l4 4L13 1" stroke="#555" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+// ── Three-state ticks: sent | delivered | read ──────────────────
+// sent      = single grey tick     (message reached the server)
+// delivered = double grey tick     (partner's device received it)
+// read      = double gold tick     (partner opened the chat)
+function buildTick(state) {
+  // Support legacy boolean call (true=read, false=sent)
+  if (state === true)  state = 'read';
+  if (state === false) state = 'sent';
+
+  if (state === 'read') {
+    // Double gold — both checks filled gold
+    return `<svg viewBox="0 0 22 13" width="19" height="13">
+      <path d="M1 7l4 4L15 2"   stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M8 11l4-4"        stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M12 7l4-4"        stroke="var(--gold)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  if (state === 'delivered') {
+    // Double grey — message reached partner's device
+    return `<svg viewBox="0 0 22 13" width="19" height="13">
+      <path d="M1 7l4 4L15 2"   stroke="#666" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M8 11l4-4"        stroke="#666" fill="none" stroke-width="2" stroke-linecap="round"/>
+      <path d="M12 7l4-4"        stroke="#666" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  // sent — single grey tick
+  return `<svg viewBox="0 0 14 13" width="14" height="13">
+    <path d="M1 7l4 4L13 2" stroke="#555" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function tickState(msg) {
+  if (msg.read_at)      return 'read';
+  if (msg.delivered_at) return 'delivered';
+  return 'sent';
 }
 
 async function markAllRead() {
@@ -795,21 +867,28 @@ async function markAllRead() {
     .update({ read_at: new Date().toISOString() })
     .eq('sender_id', partnerProfile.id).is('read_at', null);
 }
-function updateReadTickInUI(msgId) {
-  const wrap = document.querySelector(`.bubble-wrap[data-id="${msgId}"]`); if (!wrap) return;
-  const tick = wrap.querySelector('.read-tick'); if (!tick) return;
-  tick.className = 'read-tick read'; tick.innerHTML = buildTick(true); tick.title = 'Read';
+function updateTickInUI(msgId, state) {
+  const wrap = document.querySelector(`.bubble-wrap[data-id="${msgId}"]`);
+  if (!wrap) return;
+  const tick = wrap.querySelector('.read-tick');
+  if (!tick) return;
+  tick.className = `read-tick ${state}`;
+  tick.innerHTML = buildTick(state);
+  tick.title = state === 'read' ? 'Read' : state === 'delivered' ? 'Delivered' : 'Sent';
 }
+// Convenience shims
+function updateReadTickInUI(msgId)      { updateTickInUI(msgId, 'read'); }
+function updateDeliveredTickInUI(msgId) { updateTickInUI(msgId, 'delivered'); }
 
 // ── Send message ───────────────────────────────
 async function sendMessage() {
   // If there's a pending image, send that instead
-  if (_pendingImageFile) { await sendImageMessage(); return; }
+  if (_pendingImages.length > 0) { await sendImageMessage(); return; }
 
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   if (!content || !currentUser) return;
-  input.value = ''; autoResize(input); closeEmojiPicker(); closeStickerPicker(); clearTypingFlag();
+  input.value = ''; autoResize(input); closeEmojiPicker(); closeStickerPicker(); clearTypingFlag(); updateActionBtn();
 
   const row = {
     sender_id: currentUser.id,
@@ -859,7 +938,34 @@ function subscribeRealtime() {
     })
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'messages' }, payload => {
       const u = payload.new;
-      if (u.sender_id === currentUser.id && u.read_at) updateReadTickInUI(u.id);
+
+      // Tick updates on my own sent messages
+      if (u.sender_id === currentUser.id) {
+        if (u.read_at)      updateReadTickInUI(u.id);
+        else if (u.delivered_at) updateDeliveredTickInUI(u.id);
+      }
+
+      // Partner (or me) deleted for everyone → show placeholder
+      if (u.deleted_for_all) {
+        const wrap = document.querySelector(`.bubble-wrap[data-id="${u.id}"]`);
+        if (wrap) markBubbleDeleted(wrap, true);
+      }
+
+      // Partner edited their message → update bubble text live
+      if (u.edited && u.sender_id !== currentUser.id) {
+        const wrap   = document.querySelector(`.bubble-wrap[data-id="${u.id}"]`);
+        const textSp = wrap?.querySelector('.bubble span:not(.edited-label)');
+        if (textSp) {
+          textSp.textContent = u.content;
+          let el = wrap.querySelector('.edited-label');
+          if (!el) {
+            el = document.createElement('span');
+            el.className = 'edited-label'; el.textContent = 'edited';
+            const meta = wrap.querySelector('.bubble-meta');
+            if (meta) meta.insertBefore(el, meta.firstChild);
+          }
+        }
+      }
     })
     // Partner just created their account → link up automatically
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'profiles' }, async payload => {
@@ -909,11 +1015,40 @@ function hideTypingUI() {
 
 async function handleTyping(el) {
   autoResize(el);
+  updateActionBtn();
   if (typingChannel && currentUser) {
     typingChannel.send({ type:'broadcast', event:'typing', payload:{ user_id: currentUser.id, is_typing: true } });
   }
   clearTimeout(typingTimeout);
   typingTimeout = setTimeout(clearTypingFlag, 2500);
+}
+
+// Toggle the right-side button between MIC and SEND
+function updateActionBtn() {
+  const btn    = document.getElementById('action-btn');
+  const input  = document.getElementById('msg-input');
+  if (!btn) return;
+  const hasText = input?.value.trim().length > 0 || _pendingImages.length > 0;
+  if (hasText) {
+    btn.classList.add('send-mode');
+    btn.classList.remove('recording');
+    btn.title = 'Send';
+  } else {
+    btn.classList.remove('send-mode');
+    btn.title = 'Voice note';
+  }
+}
+
+// Unified action button handler
+function handleActionBtn() {
+  const btn   = document.getElementById('action-btn');
+  const input = document.getElementById('msg-input');
+  const hasText = input?.value.trim().length > 0 || _pendingImages.length > 0;
+  if (hasText) {
+    sendMessage();
+  } else {
+    toggleVoiceRecord();
+  }
 }
 function clearTypingFlag() {
   if (typingChannel && currentUser) {
@@ -968,7 +1103,7 @@ async function toggleVoiceRecord() {
     mediaRecorder = new MediaRecorder(stream); audioChunks = []; recSeconds = 0;
     mediaRecorder.ondataavailable = e => { if (e.data.size>0) audioChunks.push(e.data); };
     mediaRecorder.start(200);
-    document.getElementById('voice-btn').classList.add('recording');
+    document.getElementById('action-btn').classList.add('recording'); document.getElementById('action-btn').classList.remove('send-mode');
     openModal('voice-modal');
     recInterval = setInterval(() => {
       recSeconds++;
@@ -981,7 +1116,7 @@ async function toggleVoiceRecord() {
 async function stopAndSendRecording() {
   if (!mediaRecorder) return;
   clearInterval(recInterval); closeModal('voice-modal');
-  document.getElementById('voice-btn').classList.remove('recording');
+  document.getElementById('action-btn').classList.remove('recording'); updateActionBtn();
   const duration = `${Math.floor(recSeconds/60)}:${String(recSeconds%60).padStart(2,'0')}`;
   mediaRecorder.stop();
   mediaRecorder.onstop = async () => {
@@ -997,7 +1132,7 @@ async function stopAndSendRecording() {
 }
 function cancelRecording() {
   if (mediaRecorder) { clearInterval(recInterval); try { mediaRecorder.stream.getTracks().forEach(t=>t.stop()); } catch(e){} mediaRecorder=null; }
-  document.getElementById('voice-btn').classList.remove('recording'); closeModal('voice-modal');
+  document.getElementById('action-btn').classList.remove('recording'); updateActionBtn(); closeModal('voice-modal');
 }
 function playVoice(url, btn) {
   if (currentAudio) { currentAudio.pause(); currentAudio=null; }
@@ -1036,14 +1171,24 @@ function triggerNotification(msg) {
 // ── UI Helpers ─────────────────────────────────
 function handleInputKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,110)+'px'; }
-function toggleEmojiPicker() { document.getElementById('emoji-picker').classList.toggle('show'); }
-function closeEmojiPicker()  { document.getElementById('emoji-picker').classList.remove('show'); }
+function toggleEmojiPicker() {
+  const picker = document.getElementById('emoji-picker');
+  const btn    = document.getElementById('emoji-tb-btn');
+  const isOpen = picker.classList.toggle('show');
+  btn?.classList.toggle('active', isOpen);
+  if (isOpen) closeStickerPicker(); // close sticker if open
+}
+function closeEmojiPicker() {
+  document.getElementById('emoji-picker').classList.remove('show');
+  document.getElementById('emoji-tb-btn')?.classList.remove('active');
+}
 function insertEmoji(e) {
   const i=document.getElementById('msg-input'), pos=i.selectionStart;
   i.value=i.value.slice(0,pos)+e+i.value.slice(pos); i.focus(); i.selectionStart=i.selectionEnd=pos+e.length;
 }
 document.addEventListener('click', e => {
-  if (!e.target.closest('.emoji-btn') && !e.target.closest('.emoji-picker')) closeEmojiPicker();
+  if (!e.target.closest('#emoji-tb-btn') && !e.target.closest('.emoji-picker')) closeEmojiPicker();
+  if (!e.target.closest('#sticker-btn') && !e.target.closest('.sticker-picker')) closeStickerPicker();
 });
 function openModal(id)  { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
@@ -1217,7 +1362,13 @@ function attachLongPress(wrap, msg) {
   });
 }
 
-function closeCtxMenu() { document.getElementById('ctx-menu').classList.remove('show'); }
+// ── Close context menu ──────────────────────────────────────────
+function closeCtxMenu() {
+  const menu = document.getElementById('ctx-menu');
+  menu.classList.remove('show');
+  // Reset position so it doesn't flash in wrong place next time
+  menu.style.left = '-9999px';
+}
 document.addEventListener('click', e => {
   if (!e.target.closest('#ctx-menu')) closeCtxMenu();
 });
@@ -1225,134 +1376,299 @@ document.addEventListener('touchstart', e => {
   if (!e.target.closest('#ctx-menu')) closeCtxMenu();
 }, { passive: true });
 
+// ── Context menu action handler ──────────────────────────────────
 async function ctxAction(action) {
+  // Close menu FIRST, immediately — before any async work
   closeCtxMenu();
   if (!_ctxMsg) return;
   const msg = _ctxMsg;
+  _ctxMsg = null; // clear so accidental double-tap does nothing
 
+  // ── Reply ──────────────────────────────────────────────────────
   if (action === 'reply') {
     triggerReply(msg);
   }
 
+  // ── Copy ───────────────────────────────────────────────────────
   if (action === 'copy') {
     const text = msg.content || '';
-    try { await navigator.clipboard.writeText(text); showToast('⎘', 'Copied!'); }
-    catch(_) { showToast('⚠️', 'Could not copy'); }
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('⎘', 'Copied!');
+    } catch(_) {
+      // Fallback for browsers that block clipboard without user gesture
+      const el = document.createElement('textarea');
+      el.value = text; el.style.position = 'fixed'; el.style.opacity = '0';
+      document.body.appendChild(el); el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('⎘', 'Copied!');
+    }
   }
 
+  // ── Edit ───────────────────────────────────────────────────────
   if (action === 'edit') {
-    const bubble = document.querySelector(`.bubble-wrap[data-id="${msg.id}"] .bubble`);
+    const wrap   = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
+    const bubble = wrap?.querySelector('.bubble');
     if (!bubble) return;
-    bubble.contentEditable = 'true';
+
+    // Only edit the text node (not the edited-label span)
+    const textSpan = bubble.querySelector('span:not(.edited-label)') || bubble;
+    const original = textSpan.textContent.trim();
+
+    textSpan.contentEditable = 'true';
     bubble.classList.add('editing');
-    bubble.focus();
+    textSpan.focus();
+
     // Move cursor to end
-    const range = document.createRange(); range.selectNodeContents(bubble);
-    range.collapse(false);
+    const range = document.createRange();
+    range.selectNodeContents(textSpan); range.collapse(false);
     const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
 
     function finishEdit(e) {
       if ((e.type === 'keydown' && e.key === 'Enter' && !e.shiftKey) || e.type === 'blur') {
         if (e.type === 'keydown') e.preventDefault();
-        bubble.contentEditable = 'false';
+        textSpan.contentEditable = 'false';
         bubble.classList.remove('editing');
-        bubble.removeEventListener('keydown', finishEdit);
-        bubble.removeEventListener('blur', finishEdit);
-        const newText = bubble.innerText.trim();
-        if (newText && newText !== msg.content) {
-          saveEdit(msg.id, newText, bubble);
+        textSpan.removeEventListener('keydown', finishEdit);
+        textSpan.removeEventListener('blur', finishEdit);
+        const newText = textSpan.textContent.trim();
+        if (newText && newText !== original) {
+          saveEdit(msg.id, newText, textSpan, wrap);
         }
       }
     }
-    bubble.addEventListener('keydown', finishEdit);
-    bubble.addEventListener('blur',    finishEdit);
+    textSpan.addEventListener('keydown', finishEdit);
+    textSpan.addEventListener('blur',    finishEdit);
   }
 
+  // ── Delete → show confirmation sheet ──────────────────────────
   if (action === 'delete') {
-    // Optimistic remove
-    const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
-    if (wrap) wrap.style.opacity = '0.4';
-    const { error } = await db.from('messages').delete().eq('id', msg.id).eq('sender_id', currentUser.id);
+    openDeleteConfirm(msg);
+  }
+}
+
+// ── Delete confirmation sheet ────────────────────────────────────
+let _deleteTarget = null;
+
+function openDeleteConfirm(msg) {
+  _deleteTarget = msg;
+
+  // Show message preview in sheet
+  const preview = msg.type === 'voice'   ? '🎙 Voice note'
+                : msg.type === 'image'   ? '🖼 Image'
+                : msg.type === 'sticker' ? msg.content
+                : (msg.content || '').slice(0, 80);
+  document.getElementById('delete-preview-text').textContent = preview;
+
+  document.getElementById('delete-overlay').classList.add('show');
+}
+
+function cancelDelete(e) {
+  // Close if: no event (called directly), or click was on the dark backdrop
+  if (e && e.target !== document.getElementById('delete-overlay')) return;
+  _deleteTarget = null;
+  document.getElementById('delete-overlay').classList.remove('show');
+}
+// Allow ESC key to dismiss
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    cancelDelete();
+    closeCtxMenu();
+  }
+});
+
+async function confirmDelete(scope) {
+  document.getElementById('delete-overlay').classList.remove('show');
+  if (!_deleteTarget) return;
+  const msg = _deleteTarget;
+  _deleteTarget = null;
+
+  const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
+
+  if (scope === 'me') {
+    // Soft-delete: mark deleted_for_me — only this user won't see it
+    // Optimistic update in UI immediately
+    if (wrap) markBubbleDeleted(wrap, false);
+    const { error } = await db.from('messages')
+      .update({ deleted_for_me: true })
+      .eq('id', msg.id);
     if (error) {
-      if (wrap) wrap.style.opacity = '';
+      console.error('delete-for-me error:', error.message);
       showToast('⚠️', 'Could not delete');
-    } else {
-      if (wrap) wrap.remove();
+      if (wrap) wrap.querySelector('.bubble')?.classList.remove('deleted');
+    }
+  }
+
+  if (scope === 'all') {
+    // Soft-delete for everyone: mark deleted_for_all
+    // Both bubbles update via realtime UPDATE event
+    if (wrap) markBubbleDeleted(wrap, true);
+    const { error } = await db.from('messages')
+      .update({ deleted_for_all: true })
+      .eq('id', msg.id)
+      .eq('sender_id', currentUser.id); // only sender can delete for all
+    if (error) {
+      console.error('delete-for-all error:', error.message);
+      showToast('⚠️', 'Could not delete for everyone');
+      if (wrap) {
+        const bubble = wrap.querySelector('.bubble');
+        if (bubble) { bubble.classList.remove('deleted'); bubble.textContent = msg.content; }
+      }
     }
   }
 }
 
-async function saveEdit(id, newText, bubbleEl) {
+// ── Apply deleted style to a bubble ──────────────────────────────
+function markBubbleDeleted(wrap, forAll) {
+  const bubble = wrap?.querySelector('.bubble');
+  if (!bubble) return;
+  // Determine whose deletion label to show
+  const isMine = wrap.classList.contains('mine');
+  const label = (forAll && !isMine) ? 'This message was deleted'
+              : (forAll &&  isMine) ? 'You deleted this message'
+              : 'You deleted this message'; // deleted_for_me
+  // Replace bubble content
+  bubble.className = 'bubble deleted';
+  bubble.contentEditable = 'false';
+  bubble.innerHTML = `<span class="deleted-icon">🚫</span>${label}`;
+  // Hide read-tick (not relevant on deleted message)
+  const tick = wrap.querySelector('.read-tick');
+  if (tick) tick.style.display = 'none';
+  // Remove swipe/longpress by replacing the node with a clone (removes all listeners)
+  const fresh = wrap.cloneNode(true);
+  wrap.parentNode?.replaceChild(fresh, wrap);
+}
+
+async function saveEdit(id, newText, textSpanEl, wrap) {
   const { error } = await db.from('messages')
     .update({ content: newText, edited: true })
     .eq('id', id).eq('sender_id', currentUser.id);
-  if (error) { showToast('⚠️','Edit failed'); return; }
-  bubbleEl.textContent = newText;
-  // Add / update edited label in meta
-  const wrap   = bubbleEl.closest('.bubble-wrap');
-  let edited   = wrap?.querySelector('.edited-label');
-  if (!edited) {
-    edited = document.createElement('span');
-    edited.className = 'edited-label';
-    edited.textContent = 'edited';
-    const meta = wrap?.querySelector('.bubble-meta');
-    if (meta) meta.insertBefore(edited, meta.firstChild);
+  if (error) { showToast('⚠️', 'Edit failed'); return; }
+  textSpanEl.textContent = newText;
+  // Add / update "edited" label in meta row
+  const w = wrap || textSpanEl.closest('.bubble-wrap');
+  let editedEl = w?.querySelector('.edited-label');
+  if (!editedEl) {
+    editedEl = document.createElement('span');
+    editedEl.className = 'edited-label';
+    editedEl.textContent = 'edited';
+    const meta = w?.querySelector('.bubble-meta');
+    if (meta) meta.insertBefore(editedEl, meta.firstChild);
   }
+  showToast('✎', 'Message updated');
 }
 
 // ═══════════════════════════════════════════════════════════════
 //  FEATURE: IMAGE SENDING
 // ═══════════════════════════════════════════════════════════════
-let _pendingImageFile = null;
+// ── Multi-image pending queue ────────────────────────────────────
+let _pendingImages = []; // array of { file, dataUrl }
 
 function triggerImagePick() {
   document.getElementById('img-file-input').click();
 }
 
 function onImageSelected(e) {
-  const file = e.target.files[0];
-  e.target.value = ''; // reset so same file can be picked again
-  if (!file) return;
-  if (!file.type.startsWith('image/')) { showToast('⚠️', 'Please pick an image'); return; }
-  if (file.size > 8 * 1024 * 1024) { showToast('⚠️', 'Image too large (max 8 MB)'); return; }
+  const files = Array.from(e.target.files);
+  e.target.value = '';
+  if (!files.length) return;
 
-  _pendingImageFile = file;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    document.getElementById('img-preview-thumb').src = ev.target.result;
-    document.getElementById('img-preview-wrap').classList.add('show');
-  };
-  reader.readAsDataURL(file);
+  const valid = files.filter(f => {
+    if (!f.type.startsWith('image/')) { showToast('⚠️', `${f.name} is not an image`); return false; }
+    if (f.size > 10 * 1024 * 1024)   { showToast('⚠️', `${f.name} too large (max 10 MB)`); return false; }
+    return true;
+  });
+  if (!valid.length) return;
+
+  // Cap at 9 images (like WhatsApp/Instagram)
+  const remaining = 9 - _pendingImages.length;
+  const toAdd = valid.slice(0, remaining);
+  if (valid.length > remaining) showToast('⚠️', `Max 9 images at once`);
+
+  toAdd.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      _pendingImages.push({ file, dataUrl: ev.target.result });
+      renderImagePreviews();
+      updateActionBtn();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderImagePreviews() {
+  const wrap = document.getElementById('img-preview-wrap');
+  const strip = document.getElementById('img-preview-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  _pendingImages.forEach((item, idx) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'img-thumb-item';
+    thumb.innerHTML = `
+      <img src="${item.dataUrl}" class="img-preview-thumb" />
+      <button class="img-thumb-remove" onclick="removeImageAt(${idx})">✕</button>
+    `;
+    strip.appendChild(thumb);
+  });
+  wrap.classList.toggle('show', _pendingImages.length > 0);
+}
+
+function removeImageAt(idx) {
+  _pendingImages.splice(idx, 1);
+  renderImagePreviews();
+  updateActionBtn();
 }
 
 function cancelImageSend() {
-  _pendingImageFile = null;
-  document.getElementById('img-preview-wrap').classList.remove('show');
-  document.getElementById('img-preview-thumb').src = '';
+  _pendingImages = [];
+  const wrap = document.getElementById('img-preview-wrap');
+  const strip = document.getElementById('img-preview-strip');
+  if (strip) strip.innerHTML = '';
+  wrap?.classList.remove('show');
+  updateActionBtn();
 }
 
 async function sendImageMessage() {
-  if (!_pendingImageFile) return;
-  const file = _pendingImageFile;
+  if (!_pendingImages.length) return;
+  const images = [..._pendingImages];
   cancelImageSend();
-  showToast('🖼', 'Uploading image…');
 
-  const ext      = file.name.split('.').pop() || 'jpg';
-  const filename = `img_${Date.now()}_${currentUser.id.slice(0,8)}.${ext}`;
+  showToast('🖼', `Sending ${images.length} image${images.length > 1 ? 's' : ''}…`);
 
-  const { error: upErr } = await db.storage
-    .from('images')
-    .upload(filename, file, { contentType: file.type, upsert: false });
+  const uploadOne = async (item) => {
+    const ext = item.file.name.split('.').pop() || 'jpg';
+    const filename = `img_${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`;
+    const { error } = await db.storage.from('images')
+      .upload(filename, item.file, { contentType: item.file.type, upsert: false });
+    if (error) { console.error('upload error:', error); return null; }
+    const { data } = db.storage.from('images').getPublicUrl(filename);
+    return data.publicUrl;
+  };
 
-  if (upErr) {
-    showToast('⚠️', 'Upload failed — create an "images" bucket in Storage');
-    console.error(upErr); return;
+  if (images.length === 1) {
+    // Single image — send as regular 'image' type
+    const url = await uploadOne(images[0]);
+    if (!url) { showToast('⚠️', 'Upload failed'); return; }
+    const extra = _replyTarget
+      ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) }
+      : {};
+    cancelReply();
+    await sendSpecial('image', url, extra);
+  } else {
+    // Multiple images — upload all in parallel then send one message with JSON array
+    const urls = await Promise.all(images.map(uploadOne));
+    const failed = urls.filter(u => !u).length;
+    const good   = urls.filter(Boolean);
+    if (!good.length) { showToast('⚠️', 'All uploads failed'); return; }
+    if (failed)       showToast('⚠️', `${failed} image(s) failed to upload`);
+    const extra = _replyTarget
+      ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) }
+      : {};
+    cancelReply();
+    // content = JSON array of URLs; type = 'images' (plural)
+    await sendSpecial('images', JSON.stringify(good), extra);
   }
-
-  const { data: urlData } = db.storage.from('images').getPublicUrl(filename);
-  const extra = _replyTarget ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) } : {};
-  cancelReply();
-  await sendSpecial('image', urlData.publicUrl, extra);
 }
 
 function openImgViewer(src) {
@@ -1387,11 +1703,12 @@ function showStickerCat(idx, btn) {
 
 function toggleStickerPicker() {
   const picker = document.getElementById('sticker-picker');
+  const btn    = document.getElementById('sticker-btn');
   const isOpen = picker.classList.contains('show');
-  picker.classList.toggle('show');
-  closeEmojiPicker();
+  picker.classList.toggle('show', !isOpen);
+  btn?.classList.toggle('active', !isOpen);
   if (!isOpen) {
-    // populate first category on open
+    closeEmojiPicker();
     const firstTab = document.querySelector('.sticker-tab');
     if (firstTab && !document.getElementById('sticker-grid').children.length) {
       showStickerCat(0, firstTab);
@@ -1399,7 +1716,10 @@ function toggleStickerPicker() {
   }
 }
 
-function closeStickerPicker() { document.getElementById('sticker-picker').classList.remove('show'); }
+function closeStickerPicker() {
+  document.getElementById('sticker-picker').classList.remove('show');
+  document.getElementById('sticker-btn')?.classList.remove('active');
+}
 
 async function sendSticker(emoji) {
   closeStickerPicker();
