@@ -964,13 +964,21 @@ async function sendMessage() {
   }
 
   const { data, error } = await db.from('messages').insert(row).select().single();
-  if (!error && data) { renderMessage(data); scrollToBottom(); sendPushToPartner(data); }
+  if (!error && data) {
+    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
+    // Check tick state after short delay (DB trigger sets delivered_at immediately)
+    setTimeout(() => refreshAllTicks(), 1500);
+    setTimeout(() => refreshAllTicks(), 4000);
+  }
 }
 
 async function sendSpecial(type, content, extra = {}) {
   const { data, error } = await db.from('messages')
     .insert({ sender_id: currentUser.id, type, content, ...extra }).select().single();
-  if (!error && data) { renderMessage(data); scrollToBottom(); sendPushToPartner(data); }
+  if (!error && data) {
+    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
+    setTimeout(() => refreshAllTicks(), 1500);
+  }
 }
 
 // ── Realtime ───────────────────────────────────
@@ -981,26 +989,29 @@ let _tickPollInterval = null;
 // This handles the case where realtime UPDATE events are missed.
 function startTickPoller() {
   if (_tickPollInterval) clearInterval(_tickPollInterval);
-  _tickPollInterval = setInterval(async () => {
-    if (!currentUser || document.hidden) return;
-    // Find all bubble-wraps that still show "sent" or "delivered" state
-    const sentWraps = [...document.querySelectorAll('.bubble-wrap.mine')].filter(w => {
-      const tick = w.querySelector('.read-tick');
-      return tick && !tick.classList.contains('read');
-    });
-    if (!sentWraps.length) return;
-    const ids = sentWraps.map(w => w.dataset.id).filter(Boolean);
-    if (!ids.length) return;
-    const { data } = await db.from('messages')
-      .select('id, delivered_at, read_at')
-      .in('id', ids)
-      .eq('sender_id', currentUser.id);
-    if (!data) return;
-    data.forEach(m => {
-      if (m.read_at)           updateReadTickInUI(m.id);
-      else if (m.delivered_at) updateDeliveredTickInUI(m.id);
-    });
-  }, 4000);
+  _tickPollInterval = setInterval(() => refreshAllTicks(), 2500);
+}
+
+// Immediately refresh all visible sent-message ticks from DB
+async function refreshAllTicks() {
+  if (!currentUser || document.hidden) return;
+  // Get ALL my sent bubbles that aren't showing gold read ticks yet
+  const pendingWraps = [...document.querySelectorAll('.bubble-wrap.mine')].filter(w => {
+    const tick = w.querySelector('.read-tick');
+    return tick && !tick.classList.contains('read');
+  });
+  if (!pendingWraps.length) return;
+  const ids = pendingWraps.map(w => w.dataset.id).filter(Boolean);
+  if (!ids.length) return;
+  const { data } = await db.from('messages')
+    .select('id, delivered_at, read_at')
+    .in('id', ids)
+    .eq('sender_id', currentUser.id);
+  if (!data) return;
+  data.forEach(m => {
+    if (m.read_at)           updateReadTickInUI(m.id);
+    else if (m.delivered_at) updateDeliveredTickInUI(m.id);
+  });
 }
 
 function subscribeRealtime() {
