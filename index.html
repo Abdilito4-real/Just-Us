@@ -1245,6 +1245,9 @@
     .delete-opt .do-sub {
       font-size: 0.72rem; color: var(--text-faint); display: block; margin-top: 1px;
     }
+    .danger-opt .do-icon { font-size: 1rem; }
+    .danger-opt .do-label { color: #f87171 !important; }
+    .danger-opt .do-sub   { color: rgba(248,113,113,0.6) !important; }
     .delete-cancel {
       background: transparent; border: 1px solid var(--border);
       border-radius: var(--radius-sm); padding: 0.8rem;
@@ -1643,11 +1646,31 @@
       <span class="do-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></span>
       <span class="do-label">About Our Space</span>
     </button>
+    <button class="delete-opt danger-opt" onclick="openDeleteChatConfirm()">
+      <span class="do-icon">🗑</span>
+      <span class="do-label">Delete Chat
+        <span class="do-sub">Clears all messages for both of you</span>
+      </span>
+    </button>
     <button class="delete-opt" onclick="signOut()">
       <span class="do-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg></span>
       <span class="do-label">Sign Out</span>
     </button>
     <button class="delete-cancel" onclick="closeModal('settings-modal')">Close</button>
+  </div>
+</div>
+
+<!-- DELETE CHAT CONFIRM -->
+<div class="modal-overlay" id="delete-chat-modal">
+  <div class="modal">
+    <h3 style="color:#f87171">Delete entire chat?</h3>
+    <p style="font-size:0.82rem;color:var(--text-dim);margin-top:-0.25rem;line-height:1.5">
+      This will permanently delete all messages for <strong>both of you</strong>. There's no undo.
+    </p>
+    <div style="display:flex;gap:0.75rem;margin-top:0.5rem">
+      <button class="delete-cancel" style="flex:1" onclick="closeModal('delete-chat-modal')">Cancel</button>
+      <button class="btn-gold" style="flex:1;background:#f87171;color:#fff" onclick="confirmDeleteChat()">Delete everything</button>
+    </div>
   </div>
 </div>
 
