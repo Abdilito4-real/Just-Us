@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="65%">
+      <stop offset="0%"   stop-color="#1a1400"/>
+      <stop offset="100%" stop-color="#0a0a0a"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#d4af37" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#d4af37" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#f0d060"/>
+      <stop offset="50%"  stop-color="#d4af37"/>
+      <stop offset="100%" stop-color="#9a7a1a"/>
+    </linearGradient>
+    <linearGradient id="gold2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0d060"/>
+      <stop offset="50%"  stop-color="#d4af37"/>
+      <stop offset="100%" stop-color="#9a7a1a"/>
+    </linearGradient>
+    <filter id="soft-glow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="110" fill="url(#bg)"/>
+  <!-- Ambient glow -->
+  <ellipse cx="256" cy="220" rx="200" ry="180" fill="url(#glow)"/>
+
+  <!-- Outer diamond frame -->
+  <polygon points="256,72 440,256 256,440 72,256"
+           fill="none" stroke="url(#gold)" stroke-width="3" opacity="0.35"/>
+
+  <!-- Inner diamond -->
+  <polygon points="256,110 400,256 256,402 112,256"
+           fill="none" stroke="url(#gold)" stroke-width="1.5" opacity="0.2"/>
+
+  <!-- Left ring -->
+  <circle cx="218" cy="256" r="72"
+          fill="none" stroke="url(#gold)" stroke-width="11"
+          filter="url(#soft-glow)" opacity="0.92"/>
+
+  <!-- Right ring -->
+  <circle cx="294" cy="256" r="72"
+          fill="none" stroke="url(#gold2)" stroke-width="11"
+          filter="url(#soft-glow)" opacity="0.92"/>
+
+  <!-- Centre overlap fill — soften the crossing -->
+  <path d="M256,192 a72,72 0 0,1 0,128 a72,72 0 0,1 0,-128 z"
+        fill="#0a0a0a" opacity="0.55"/>
+
+  <!-- Small diamond centre gem -->
+  <polygon points="256,228 278,256 256,284 234,256"
+           fill="url(#gold)" opacity="0.9"/>
+
+  <!-- Corner ornaments -->
+  <circle cx="256" cy="72"  r="5" fill="#d4af37" opacity="0.7"/>
+  <circle cx="440" cy="256" r="5" fill="#d4af37" opacity="0.7"/>
+  <circle cx="256" cy="440" r="5" fill="#d4af37" opacity="0.7"/>
+  <circle cx="72"  cy="256" r="5" fill="#d4af37" opacity="0.7"/>
+</svg>

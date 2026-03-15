@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- iOS viewport: viewport-fit=cover pulls layout under the notch/Dynamic Island -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <meta name="description" content="Our Space — just the two of us." />
+
+  <!-- iOS PWA full-screen mode -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Our Space" />
+  <meta name="application-name" content="Our Space" />
+
+  <title>Our Space</title>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Favicon (browser tab) -->
+  <link rel="icon" type="image/x-icon"   href="favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
+  <link rel="icon" type="image/svg+xml"  href="favicon.svg" />
+
+  <!-- Apple touch icons (home screen icons on iOS) -->
+  <link rel="apple-touch-icon"                   href="icon-180.png" />
+  <link rel="apple-touch-icon" sizes="180x180"   href="icon-180.png" />
+  <link rel="apple-touch-icon" sizes="152x152"   href="icon-152.png" />
+  <link rel="apple-touch-icon" sizes="120x120"   href="icon-120.png" />
+
+  <!-- iOS splash screens (optional but prevents white flash on launch) -->
+  <meta name="apple-touch-startup-image" content="icon-512.png" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --bg:         #0a0a0a;
+      --surface:    #111111;
+      --surface2:   #191919;
+      --border:     rgba(212,175,55,0.15);
+      --gold:       #d4af37;
+      --gold-soft:  rgba(212,175,55,0.08);
+      --gold-glow:  rgba(212,175,55,0.25);
+      --text:       #f0ead6;
+      --text-dim:   rgba(240,234,214,0.45);
+      --text-faint: rgba(240,234,214,0.2);
+      --radius:     18px;
+      --radius-sm:  10px;
+      /* iOS safe areas */
+      --sat: env(safe-area-inset-top,    0px);
+      --sar: env(safe-area-inset-right,  0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left,   0px);
+    }
+    *, *::before, *::after {
+      box-sizing: border-box; margin: 0; padding: 0;
+      /* Kill grey tap flash on iOS */
+      -webkit-tap-highlight-color: transparent;
+    }
+    html {
+      height: 100%;
+      /* Prevent elastic overscroll on the html element */
+      overscroll-behavior: none;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 300;
+      /* Use dvh for dynamic viewport (accounts for iOS address bar) */
+      height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      overscroll-behavior: none;
+      /* Prevent iOS text size adjustment */
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 9999;
+    }
+
+    /* SCREENS */
+    .screen {
+      display: none; width: 100%; height: 100dvh;
+      flex-direction: column;
+      /* Ensure content never hides under notch/Dynamic Island */
+      padding-top: var(--sat);
+      padding-left: var(--sal);
+      padding-right: var(--sar);
+    }
+    .screen.active { display: flex; }
+
+    /* Auth & setup screens don't need bottom safe padding (no fixed bottom bar) */
+    #auth-screen, #setup-screen {
+      padding-bottom: calc(var(--sab) + 1rem);
+    }
+
+    /* ── AUTH ── */
+    #auth-screen {
+      align-items: center; justify-content: center;
+      padding: 1.5rem; gap: 1.75rem;
+      background: radial-gradient(ellipse 70% 55% at 50% 25%, rgba(212,175,55,0.07) 0%, transparent 70%);
+      overflow-y: auto;
+    }
+    .auth-logo { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; }
+    .auth-logo .ring {
+      width: 68px; height: 68px; border-radius: 50%;
+      border: 1.5px solid var(--gold);
+      display: flex; align-items: center; justify-content: center;
+      animation: pulse-ring 3s ease-in-out infinite;
+    }
+    .auth-logo .ring svg { width: 30px; height: 30px; fill: var(--gold); }
+    .auth-logo h1 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 2.5rem; font-weight: 300;
+      letter-spacing: 0.12em; color: var(--gold);
+    }
+    .auth-logo p { font-size: 0.74rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--text-dim); }
+    .auth-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.75rem;
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+    .auth-card h2 { font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; font-weight: 400; }
+    .field { display: flex; flex-direction: column; gap: 0.35rem; }
+    .field label { font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-dim); }
+    .field input {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.72rem 0.9rem;
+      color: var(--text); font-family: 'DM Sans', sans-serif;
+      /* >= 16px to prevent iOS zoom */
+      font-size: 1rem; font-weight: 300; outline: none;
+      transition: border-color 0.2s;
+      /* Remove iOS default styling */
+      -webkit-appearance: none; appearance: none;
+      width: 100%;
+    }
+    .field input:focus { border-color: rgba(212,175,55,0.5); }
+    .field input::placeholder { color: var(--text-faint); }
+    .btn-gold {
+      background: var(--gold); color: #0a0a0a; border: none;
+      border-radius: var(--radius-sm); padding: 0.82rem;
+      font-family: 'DM Sans', sans-serif; font-size: 0.88rem;
+      font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase;
+      cursor: pointer; transition: opacity 0.2s, transform 0.1s;
+      -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none;
+      min-height: 44px;
+    }
+    .btn-gold:hover { opacity: 0.85; }
+    .btn-gold:active { transform: scale(0.98); }
+    .btn-gold:disabled { opacity: 0.35; cursor: not-allowed; }
+    .auth-switch { text-align: center; font-size: 0.8rem; color: var(--text-dim); }
+    .auth-switch span { color: var(--gold); cursor: pointer; }
+    .auth-error {
+      background: rgba(220,60,60,0.1); border: 1px solid rgba(220,60,60,0.22);
+      border-radius: var(--radius-sm); padding: 0.55rem 0.85rem;
+      font-size: 0.8rem; color: #f87171; display: none;
+    }
+    .auth-error.show { display: block; }
+    .config-notice {
+      background: var(--gold-soft); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.75rem 0.9rem;
+      font-size: 0.74rem; color: var(--text-dim); line-height: 1.55;
+      max-width: 360px; width: 100%;
+    }
+    .config-notice code { color: var(--gold); font-family: monospace; }
+
+    /* ── SETUP ── */
+    #setup-screen {
+      align-items: center; justify-content: center;
+      padding: 2rem; gap: 1.25rem;
+      overflow-y: auto;
+    }
+    #setup-screen h2 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.75rem; font-weight: 300; color: var(--gold); text-align: center;
+    }
+    #setup-screen p { font-size: 0.83rem; color: var(--text-dim); text-align: center; max-width: 280px; }
+    .setup-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.75rem;
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    /* ── APP ── */
+    #app-screen {
+      max-width: 480px; width: 100%;
+      margin: 0 auto; position: relative;
+    }
+
+    /* Header — no top safe-area padding needed; the .screen already pads */
+    .app-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.85rem 1.2rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg); z-index: 10; flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 0.7rem; }
+    .partner-avatar {
+      width: 38px; height: 38px; border-radius: 50%;
+      border: 1.5px solid var(--gold);
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Cormorant Garamond', serif; font-size: 1.1rem; color: var(--gold);
+      position: relative; flex-shrink: 0;
+    }
+    .presence-dot {
+      position: absolute; bottom: 0; right: 0;
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid var(--bg); transition: background 0.4s;
+    }
+    .presence-dot.online  { background: #4ade80; }
+    .presence-dot.away    { background: #facc15; }
+    .presence-dot.offline { background: #444; }
+    .header-info h3 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.05rem; font-weight: 400; line-height: 1; color: var(--text);
+    }
+    .header-info .status-line { font-size: 0.68rem; color: var(--text-dim); margin-top: 2px; transition: color 0.4s; }
+    .header-info .status-line[data-status="online"] { color: #4ade80; }
+    .header-info .status-line[data-status="away"]   { color: #facc15; }
+    .header-right { display: flex; gap: 0.4rem; }
+    .icon-btn {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 1px solid var(--border); background: transparent;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      color: var(--gold); transition: background 0.2s;
+      -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none;
+    }
+    .icon-btn:hover { background: var(--gold-soft); }
+    .icon-btn svg { width: 15px; height: 15px; fill: currentColor; }
+
+    /* Affection Bar */
+    .affection-bar {
+      display: flex; gap: 0.45rem; padding: 0.55rem 1rem;
+      border-bottom: 1px solid var(--border); background: var(--surface);
+      overflow-x: auto; scrollbar-width: none; flex-shrink: 0;
+    }
+    .affection-bar::-webkit-scrollbar { display: none; }
+    .aff-btn {
+      display: flex; align-items: center; gap: 0.35rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 0.4rem 0.85rem;
+      cursor: pointer; white-space: nowrap;
+      color: var(--text-dim); font-size: 0.76rem;
+      font-family: 'DM Sans', sans-serif; font-weight: 300;
+      transition: all 0.2s;
+      -webkit-appearance: none; appearance: none;
+      min-height: 36px;
+    }
+    .aff-btn:hover { border-color: var(--gold); color: var(--gold); background: var(--gold-soft); }
+    .aff-btn .e { font-size: 0.9rem; }
+
+    /* Mood Banner */
+    .mood-banner {
+      padding: 0.5rem 1.2rem; background: var(--gold-soft);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.76rem; color: var(--text-dim);
+      align-items: center; gap: 0.45rem; display: none; flex-shrink: 0;
+    }
+    .mood-banner.show { display: flex; }
+    .mood-banner strong { color: var(--gold); font-weight: 400; }
+
+    /* Messages */
+    .messages-area {
+      flex: 1; overflow-y: auto;
+      padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.55rem;
+      scroll-behavior: smooth;
+      scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+      /* iOS momentum scrolling */
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+    }
+    .messages-area::-webkit-scrollbar { width: 3px; }
+    .messages-area::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .date-divider {
+      text-align: center; font-size: 0.67rem;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--text-faint); margin: 0.4rem 0;
+    }
+
+    .bubble-wrap {
+      display: flex; flex-direction: column; max-width: 78%;
+      animation: bubble-in 0.26s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .bubble-wrap.mine  { align-self: flex-end;  align-items: flex-end; }
+    .bubble-wrap.theirs { align-self: flex-start; align-items: flex-start; }
+
+    .bubble {
+      padding: 0.65rem 0.95rem; border-radius: 18px;
+      font-size: 0.88rem; line-height: 1.55;
+    }
+    .bubble-wrap.mine .bubble {
+      background: var(--gold); color: #0a0a0a;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble-wrap.theirs .bubble {
+      background: var(--surface2); color: var(--text);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+    .bubble.affection-bubble {
+      background: transparent !important; border: 1px solid var(--gold) !important;
+      color: var(--gold) !important; text-align: center;
+      font-family: 'Cormorant Garamond', serif; font-size: 0.98rem;
+      font-style: italic; padding: 0.55rem 1.1rem;
+    }
+    .bubble.voice-bubble {
+      display: flex; align-items: center; gap: 0.7rem; min-width: 155px;
+    }
+    .voice-play {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: rgba(0,0,0,0.15); border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; color: inherit;
+    }
+    .voice-play svg { width: 11px; height: 11px; fill: currentColor; }
+    .voice-waveform { display: flex; align-items: center; gap: 2px; flex: 1; }
+    .voice-waveform span {
+      display: block; width: 3px; border-radius: 2px;
+      background: currentColor; opacity: 0.55;
+      animation: waveform-idle 1.6s ease-in-out infinite;
+    }
+    .voice-waveform span:nth-child(1){ height: 7px;  animation-delay: 0s; }
+    .voice-waveform span:nth-child(2){ height: 13px; animation-delay: 0.1s; }
+    .voice-waveform span:nth-child(3){ height: 9px;  animation-delay: 0.2s; }
+    .voice-waveform span:nth-child(4){ height: 17px; animation-delay: 0.3s; }
+    .voice-waveform span:nth-child(5){ height: 11px; animation-delay: 0.4s; }
+    .voice-waveform span:nth-child(6){ height: 15px; animation-delay: 0.15s; }
+    .voice-waveform span:nth-child(7){ height: 8px;  animation-delay: 0.25s; }
+    .voice-dur { font-size: 0.72rem; opacity: 0.7; }
+    .bubble-time { font-size: 0.63rem; color: var(--text-faint); }
+    .bubble-meta {
+      display: flex; align-items: center; gap: 3px;
+      margin-top: 0.18rem; padding: 0 0.2rem;
+    }
+    .bubble-wrap.mine  .bubble-meta { justify-content: flex-end; }
+    .bubble-wrap.theirs .bubble-meta { justify-content: flex-start; }
+    .read-tick { display: flex; align-items: center; line-height: 1; }
+    .read-tick.sent  svg path { stroke: #555; }
+    .read-tick.read  svg path { stroke: var(--gold); }
+    /* Day separator override for dynamically inserted ones */
+    .day-sep { margin: 0.5rem 0; }
+
+    /* Special message types */
+    .event-msg {
+      align-self: center;
+      display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+      padding: 0.75rem 1rem;
+      animation: bubble-in 0.28s ease;
+    }
+    .event-msg .ev-icon { font-size: 2rem; }
+    .event-msg .ev-icon.heartbeat { animation: heartbeat 0.8s ease-in-out 3; }
+    .event-msg .ev-icon.hug { animation: hug-shake 0.6s ease 2; }
+    .event-msg span { font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold); }
+
+    /* Typing indicator */
+    .typing-indicator {
+      align-self: flex-start;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 18px; border-bottom-left-radius: 4px;
+      padding: 0.6rem 0.9rem; display: none; align-items: center; gap: 4px;
+    }
+    .typing-indicator.show { display: flex; }
+    .typing-indicator span {
+      width: 5px; height: 5px; border-radius: 50%; background: var(--gold);
+      animation: typing-dot 1.2s ease-in-out infinite;
+    }
+    .typing-indicator span:nth-child(2){ animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3){ animation-delay: 0.4s; }
+
+    /* Input */
+    .input-area {
+      /* Safe area bottom so input bar sits above home indicator.
+         --keyboard-offset is set dynamically by JS when iOS keyboard opens. */
+      padding: 0.75rem 0.9rem calc(0.75rem + var(--sab) + var(--keyboard-offset, 0px));
+      border-top: 1px solid var(--border);
+      background: var(--bg); display: flex; align-items: flex-end; gap: 0.55rem;
+      flex-shrink: 0; position: relative;
+    }
+    .input-wrap {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 22px; display: flex; align-items: flex-end;
+      padding: 0.48rem 0.8rem; gap: 0.4rem; transition: border-color 0.2s;
+    }
+    .input-wrap:focus-within { border-color: rgba(212,175,55,0.4); }
+    .msg-input {
+      flex: 1; border: none; background: transparent; color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      /* IMPORTANT: font-size must be >= 16px on iOS to prevent auto-zoom on focus */
+      font-size: 1rem;
+      font-weight: 300;
+      resize: none; outline: none; max-height: 110px; line-height: 1.5;
+      /* Remove iOS default appearance */
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .msg-input::placeholder { color: var(--text-faint); }
+    .emoji-btn {
+      background: transparent; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 1.05rem; padding: 0.2rem; line-height: 1;
+      transition: color 0.2s; align-self: center;
+      -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none;
+    }
+    .emoji-btn:hover { color: var(--gold); }
+    .send-btn, .voice-btn {
+      width: 40px; height: 40px; border-radius: 50%; border: none;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all 0.2s;
+      -webkit-appearance: none; appearance: none;
+      -webkit-touch-callout: none;
+      /* Enlarge tap target to 44pt min (Apple HIG) */
+      min-width: 44px; min-height: 44px;
+    }
+    .send-btn { background: var(--gold); color: #0a0a0a; }
+    .send-btn:hover { opacity: 0.83; transform: scale(1.05); }
+    .send-btn:active { transform: scale(0.95); }
+    .send-btn svg { width: 17px; height: 17px; fill: currentColor; }
+    .voice-btn { background: var(--surface); border: 1px solid var(--border); color: var(--gold); }
+    .voice-btn:hover { background: var(--gold-soft); }
+    .voice-btn svg { width: 16px; height: 16px; fill: currentColor; }
+    .voice-btn.recording { background: rgba(220,60,60,0.12); border-color: rgba(220,60,60,0.35); color: #f87171; animation: record-pulse 1s ease-in-out infinite; }
+
+    /* Emoji picker */
+    .emoji-picker {
+      position: absolute; bottom: 68px; left: 0.9rem; right: 0.9rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.7rem;
+      flex-wrap: wrap; gap: 0.45rem; z-index: 100; display: none;
+    }
+    .emoji-picker.show { display: flex; }
+    .emoji-picker span { font-size: 1.35rem; cursor: pointer; transition: transform 0.15s; }
+    .emoji-picker span:hover { transform: scale(1.3); }
+
+    /* Modals */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(5px);
+      align-items: center; justify-content: center;
+      z-index: 1000; padding: 1rem; display: none;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.75rem;
+      width: 100%; max-width: 340px;
+      display: flex; flex-direction: column; gap: 1.1rem;
+      animation: modal-in 0.24s cubic-bezier(0.34,1.3,0.64,1);
+    }
+    .modal h3 { font-family: 'Cormorant Garamond', serif; font-size: 1.35rem; font-weight: 400; color: var(--gold); text-align: center; }
+    .modal p { font-size: 0.8rem; color: var(--text-dim); text-align: center; }
+    .modal-close { align-self: flex-end; background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem; margin-top: -0.4rem; }
+    .mood-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 0.55rem; }
+    .mood-item {
+      display: flex; flex-direction: column; align-items: center; gap: 0.2rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.65rem 0.2rem;
+      cursor: pointer; transition: all 0.18s;
+      font-size: 0.62rem; color: var(--text-dim); text-align: center;
+    }
+    .mood-item:hover, .mood-item.selected { border-color: var(--gold); background: var(--gold-soft); color: var(--gold); }
+    .mood-item .me { font-size: 1.45rem; }
+    .daily-prompt {
+      background: var(--gold-soft); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 1rem;
+      font-family: 'Cormorant Garamond', serif; font-size: 1.05rem;
+      font-style: italic; color: var(--text); text-align: center; line-height: 1.55;
+    }
+    .btn-ghost {
+      flex: 1; background: transparent; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.72rem;
+      color: var(--text-dim); font-family: 'DM Sans', sans-serif; font-size: 0.82rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-ghost:hover { border-color: var(--gold); color: var(--gold); }
+    .prompt-actions { display: flex; gap: 0.6rem; }
+    .recording-visual { display: flex; flex-direction: column; align-items: center; gap: 0.9rem; }
+    .rec-orb {
+      width: 76px; height: 76px; border-radius: 50%;
+      background: rgba(220,60,60,0.12); border: 2px solid rgba(220,60,60,0.35);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.9rem; animation: record-pulse 1s ease-in-out infinite;
+    }
+    .rec-time { font-size: 1.45rem; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rec-actions { display: flex; gap: 0.6rem; width: 100%; }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 24px; padding: 0.55rem 1.1rem;
+      font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;
+      z-index: 5000; align-items: center; gap: 0.45rem; display: none;
+    }
+    .toast.show { display: flex; animation: toast-in 0.28s ease; }
+
+    /* Invite box */
+    .invite-box {
+      background: var(--gold-soft); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 1rem;
+      display: flex; flex-direction: column; gap: 0.6rem;
+      animation: modal-in 0.25s ease;
+    }
+    .invite-box.hidden { display: none; }
+    .invite-label { font-size: 0.82rem; color: var(--text); text-align: center; }
+    .invite-hint  { font-size: 0.72rem; color: var(--text-dim); text-align: center; line-height: 1.45; }
+    .invite-row   { display: flex; gap: 0.5rem; }
+    .invite-url   {
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.55rem 0.75rem;
+      color: var(--text-dim); font-size: 0.72rem; outline: none;
+      -webkit-appearance: none; appearance: none; white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; min-width: 0;
+    }
+    .btn-copy {
+      background: var(--gold); color: #0a0a0a; border: none;
+      border-radius: var(--radius-sm); padding: 0.55rem 0.9rem;
+      font-size: 0.78rem; font-weight: 500; cursor: pointer;
+      white-space: nowrap; flex-shrink: 0;
+      -webkit-appearance: none; appearance: none; min-height: 40px;
+    }
+    .btn-copy:active { opacity: 0.8; }
+
+    /* ANIMATIONS */
+    @keyframes pulse-ring {
+      0%,100% { box-shadow: 0 0 0 0 rgba(212,175,55,0.3); }
+      50%      { box-shadow: 0 0 0 10px rgba(212,175,55,0); }
+    }
+    @keyframes bubble-in {
+      from { opacity: 0; transform: scale(0.82) translateY(8px); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(22px) scale(0.94); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes heartbeat {
+      0%,100% { transform: scale(1); }
+      14% { transform: scale(1.35); }
+      28% { transform: scale(1); }
+      42% { transform: scale(1.22); }
+    }
+    @keyframes hug-shake {
+      0%,100% { transform: rotate(0deg); }
+      20% { transform: rotate(-9deg); }
+      40% { transform: rotate(9deg); }
+      60% { transform: rotate(-6deg); }
+      80% { transform: rotate(6deg); }
+    }
+    @keyframes record-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+    @keyframes typing-dot {
+      0%,80%,100% { transform: scale(1); opacity: 0.35; }
+      40%          { transform: scale(1.35); opacity: 1; }
+    }
+    @keyframes waveform-idle {
+      0%,100% { transform: scaleY(1); }
+      50%      { transform: scaleY(0.45); }
+    }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══ AUTH ═══ -->
+<div id="auth-screen" class="screen active">
+  <div class="auth-logo">
+    <div class="ring">
+      <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+    </div>
+    <h1>Our Space</h1>
+    <p>just the two of us</p>
+  </div>
+
+  <div class="auth-card">
+    <h2 id="auth-title">Welcome back</h2>
+    <div class="auth-error" id="auth-error"></div>
+    <div class="field" id="name-field" style="display:none">
+      <label>Your name</label>
+      <input type="text" id="signup-name" placeholder="What you want to be called" />
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="auth-email" placeholder="your@email.com" />
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="••••••••" />
+    </div>
+    <button class="btn-gold" id="auth-btn" onclick="handleAuth()">Sign in</button>
+    <div class="auth-switch" id="auth-switch">No account? <span onclick="toggleAuthMode()">Create one</span></div>
+  </div>
+
+  <div class="config-notice">
+    ⚙️ Open <code>app.js</code>, set your <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code>, then run the SQL in <code>schema.sql</code> before using.
+  </div>
+</div>
+
+<!-- ═══ SETUP ═══ -->
+<div id="setup-screen" class="screen">
+  <h2>one more thing ✦</h2>
+  <p>Tell us who you are and who you're sharing this space with.</p>
+  <div class="setup-card">
+    <div class="field">
+      <label>Your name</label>
+      <input type="text" id="my-name" placeholder="What you want to be called" autocomplete="nickname" />
+    </div>
+    <div class="field">
+      <label>Your partner's nickname</label>
+      <input type="text" id="partner-name" placeholder="Her name" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>Your partner's email</label>
+      <input type="email" id="partner-email" placeholder="her@email.com" autocomplete="off" autocapitalize="none" />
+    </div>
+    <button class="btn-gold" id="setup-btn" onclick="saveSetup()">Enter our space →</button>
+
+    <!-- Shown after saving — invite link for partner -->
+    <div id="invite-box" class="invite-box hidden">
+      <p class="invite-label">💛 Send this link to her so she can join:</p>
+      <div class="invite-row">
+        <input type="text" id="invite-url" readonly class="invite-url" />
+        <button class="btn-copy" onclick="copyInviteLink()">Copy</button>
+      </div>
+      <p class="invite-hint">She opens the link → creates her account → you're connected ✦</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ APP ═══ -->
+<div id="app-screen" class="screen">
+
+  <div class="app-header">
+    <div class="header-left">
+      <div class="partner-avatar">
+        <span id="partner-initial">?</span>
+        <div class="presence-dot offline" id="presence-dot"></div>
+      </div>
+      <div class="header-info">
+        <h3 id="header-partner-name">Your babe</h3>
+        <div class="status-line" id="header-status">offline</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <button class="icon-btn" onclick="openMoodModal()" title="Share mood">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+      </button>
+      <button class="icon-btn" onclick="openDailyPrompt()" title="Daily spark">
+        <svg viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+      </button>
+      <button class="icon-btn" onclick="signOut()" title="Sign out">
+        <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="affection-bar">
+    <button class="aff-btn" onclick="sendHug()"><span class="e">🤗</span> Hug</button>
+    <button class="aff-btn" onclick="sendHeartbeat()"><span class="e">💓</span> Heartbeat</button>
+    <button class="aff-btn" onclick="openMoodModal()"><span class="e">🌙</span> Mood</button>
+    <button class="aff-btn" onclick="sendGesture('kiss','💋','sent you a kiss')"><span class="e">💋</span> Kiss</button>
+    <button class="aff-btn" onclick="sendGesture('thinking','🌸','is thinking of you')"><span class="e">🌸</span> Thinking of you</button>
+  </div>
+
+  <div class="mood-banner" id="mood-banner">
+    <span>💛</span>
+    <span><strong id="mood-who"></strong> is feeling <strong id="mood-label-text"></strong></span>
+  </div>
+
+  <div class="messages-area" id="messages-area">
+    <div class="date-divider" id="date-divider">today</div>
+    <div class="typing-indicator" id="typing-indicator">
+      <span></span><span></span><span></span>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="emoji-picker" id="emoji-picker">
+      <span onclick="insertEmoji('❤️')">❤️</span>
+      <span onclick="insertEmoji('😘')">😘</span>
+      <span onclick="insertEmoji('🥰')">🥰</span>
+      <span onclick="insertEmoji('😍')">😍</span>
+      <span onclick="insertEmoji('🌹')">🌹</span>
+      <span onclick="insertEmoji('✨')">✨</span>
+      <span onclick="insertEmoji('🌙')">🌙</span>
+      <span onclick="insertEmoji('💫')">💫</span>
+      <span onclick="insertEmoji('🍀')">🍀</span>
+      <span onclick="insertEmoji('🦋')">🦋</span>
+      <span onclick="insertEmoji('💌')">💌</span>
+      <span onclick="insertEmoji('😂')">😂</span>
+      <span onclick="insertEmoji('🎶')">🎶</span>
+      <span onclick="insertEmoji('☁️')">☁️</span>
+      <span onclick="insertEmoji('🌷')">🌷</span>
+      <span onclick="insertEmoji('💐')">💐</span>
+    </div>
+    <div class="input-wrap">
+      <button class="emoji-btn" onclick="toggleEmojiPicker()">☺</button>
+      <textarea
+        class="msg-input" id="msg-input"
+        placeholder="say something sweet…"
+        rows="1"
+        onkeydown="handleInputKey(event)"
+        oninput="handleTyping(this)"
+      ></textarea>
+    </div>
+    <button class="voice-btn" id="voice-btn" onclick="toggleVoiceRecord()">
+      <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+    </button>
+    <button class="send-btn" onclick="sendMessage()">
+      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- MOOD MODAL -->
+<div class="modal-overlay" id="mood-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('mood-modal')">✕</button>
+    <h3>how are you feeling?</h3>
+    <p>Let your babe know your energy right now.</p>
+    <div class="mood-grid">
+      <div class="mood-item" onclick="selectMood('loved','Loved','🥰')"><div class="me">🥰</div>Loved</div>
+      <div class="mood-item" onclick="selectMood('happy','Happy','😊')"><div class="me">😊</div>Happy</div>
+      <div class="mood-item" onclick="selectMood('calm','Calm','🌿')"><div class="me">🌿</div>Calm</div>
+      <div class="mood-item" onclick="selectMood('tired','Tired','😴')"><div class="me">😴</div>Tired</div>
+      <div class="mood-item" onclick="selectMood('anxious','Anxious','😟')"><div class="me">😟</div>Anxious</div>
+      <div class="mood-item" onclick="selectMood('missing','Missing you','💭')"><div class="me">💭</div>Missing you</div>
+      <div class="mood-item" onclick="selectMood('playful','Playful','😜')"><div class="me">😜</div>Playful</div>
+      <div class="mood-item" onclick="selectMood('needy','Need a hug','🤗')"><div class="me">🤗</div>Need a hug</div>
+    </div>
+  </div>
+</div>
+
+<!-- DAILY PROMPT MODAL -->
+<div class="modal-overlay" id="prompt-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('prompt-modal')">✕</button>
+    <h3>daily spark ✦</h3>
+    <div class="daily-prompt" id="daily-prompt-text">loading…</div>
+    <div class="prompt-actions">
+      <button class="btn-ghost" onclick="refreshPrompt()">↺ new one</button>
+      <button class="btn-gold" style="flex:1" onclick="sendPromptAsMessage()">send to babe →</button>
+    </div>
+  </div>
+</div>
+
+<!-- VOICE MODAL -->
+<div class="modal-overlay" id="voice-modal">
+  <div class="modal">
+    <h3>voice note 🎙</h3>
+    <div class="recording-visual">
+      <div class="rec-orb">🎙</div>
+      <div class="rec-time" id="rec-time">0:00</div>
+      <p>recording… speak from the heart</p>
+    </div>
+    <div class="rec-actions">
+      <button class="btn-ghost" onclick="cancelRecording()">Cancel</button>
+      <button class="btn-gold" style="flex:1" onclick="stopAndSendRecording()">Send ↑</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <span id="toast-icon">💛</span>
+  <span id="toast-text"></span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
