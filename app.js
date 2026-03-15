@@ -965,9 +965,13 @@ function subscribeRealtime() {
       renderMessage(msg); scrollToBottom(); hideTypingUI();
       if (notifSound) notifSound();
       if (navigator.vibrate) navigator.vibrate(50);
+      // Mark delivered immediately (app is open = message received)
+      // Mark read only if app is visible
+      const now = new Date().toISOString();
       if (!document.hidden) {
-        db.from('messages').update({ read_at: new Date().toISOString() }).eq('id', msg.id);
+        db.from('messages').update({ delivered_at: now, read_at: now }).eq('id', msg.id);
       } else {
+        db.from('messages').update({ delivered_at: now }).eq('id', msg.id);
         triggerNotification(msg);
       }
     })
@@ -1200,7 +1204,7 @@ function playVoice(url, btn) {
 // Or use: https://vapidkeys.com
 // Then set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
 // as secrets in Supabase → Edge Functions → Secrets.
-const VAPID_PUBLIC_KEY = 'BNTTu-CxpWI1q3WLMAFH4yy42x9v0hX59kCYOjIrsibSLzquDRsKW7SPuSPwFsc5eCkdLj_heuaYr9JfrSonRDo';
+const VAPID_PUBLIC_KEY = 'YOUR_VAPID_PUBLIC_KEY_HERE';
 
 // ── State ───────────────────────────────────────────────────────
 let _pushSubscription = null; // current PushSubscription object
@@ -1209,17 +1213,27 @@ let _pushSubscription = null; // current PushSubscription object
 async function subscribeToPush() {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-
-    // VAPID key not configured yet
     if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
+    if (Notification.permission !== 'granted') return;
 
-    const reg = await navigator.serviceWorker.ready;
+    // Wait for SW to be fully controlling the page
+    // This is critical — push subscribe silently fails if SW isn't active yet
+    let reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('SW timeout')), 8000))
+    ]);
 
-    // Check if already subscribed
+    // Extra check: make sure SW is actually controlling this page
+    if (!navigator.serviceWorker.controller) {
+      // Force the new SW to take control immediately
+      await reg.update();
+      await new Promise(r => setTimeout(r, 500));
+      reg = await navigator.serviceWorker.ready;
+    }
+
     let sub = await reg.pushManager.getSubscription();
 
     if (!sub) {
-      // Subscribe — this shows the "Allow notifications?" prompt on iOS 16.4+
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
@@ -1228,9 +1242,9 @@ async function subscribeToPush() {
 
     _pushSubscription = sub;
     await savePushSubscription(sub);
+    console.log('✓ Push subscription active:', sub.endpoint.slice(0, 50) + '...');
     return sub;
   } catch (err) {
-    // Common reasons: iOS < 16.4, not installed as PWA, user denied
     console.warn('Push subscribe failed:', err.message || err);
   }
 }
@@ -1239,7 +1253,7 @@ async function subscribeToPush() {
 async function savePushSubscription(sub) {
   if (!currentUser || !sub) return;
   const json = sub.toJSON();
-  await db.from('push_subscriptions').upsert({
+  const { error } = await db.from('push_subscriptions').upsert({
     user_id:    currentUser.id,
     endpoint:   json.endpoint,
     p256dh:     json.keys.p256dh,
@@ -1247,6 +1261,8 @@ async function savePushSubscription(sub) {
     user_agent: navigator.userAgent.slice(0, 200),
     updated_at: new Date().toISOString(),
   }, { onConflict: 'endpoint' });
+  if (error) console.warn('savePushSubscription error:', error.message);
+  else console.log('✓ Push subscription saved to Supabase');
 }
 
 // ── Request permission then subscribe ──────────────────────────
@@ -1310,10 +1326,10 @@ async function sendPushToPartner(msg) {
     await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
       method: 'POST',
       headers: {
-  'Content-Type': 'application/json',
-  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-  'apikey': SUPABASE_ANON_KEY,
-},
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${(await db.auth.getSession()).data.session?.access_token}`,
+        'apikey': SUPABASE_ANON_KEY,
+      },
       body: JSON.stringify({
         recipientId: partnerProfile.id,
         title: 'Our Space 💛',
@@ -1569,6 +1585,39 @@ async function handleNotifSettingsBtn() {
   updateSettingsNotifUI();
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  FEATURE: DELETE CHAT
+//  Deletes all messages for both users — cannot be undone.
+// ═══════════════════════════════════════════════════════════════
+function openDeleteChatConfirm() {
+  closeModal('settings-modal');
+  openModal('delete-chat-modal');
+}
+
+async function confirmDeleteChat() {
+  closeModal('delete-chat-modal');
+
+  const btn = document.querySelector('#delete-chat-modal .btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+  // Delete ALL messages (both sender_ids) — we use service_role via RLS update policy
+  // The policy allows authenticated users to update/delete messages
+  const { error } = await db.from('messages').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+  if (error) {
+    showToast('⚠️', 'Could not delete: ' + error.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete everything'; }
+    return;
+  }
+
+  // Clear the UI immediately
+  const area = document.getElementById('messages-area');
+  const typing = document.getElementById('typing-indicator');
+  [...area.querySelectorAll('.bubble-wrap, .event-msg, .day-sep')].forEach(el => el.remove());
+
+  showToast('🗑', 'Chat cleared for both of you');
+}
+
 function handleInstallSettingsBtn() {
   closeModal('settings-modal');
   const isInstalled = window.matchMedia('(display-mode: standalone)').matches
@@ -1620,8 +1669,22 @@ function scrollToBottom(instant=false) {
   window.visualViewport.addEventListener('scroll',onVpChange);
 })();
 
+// ── Service Worker registration ────────────────────────────────
+// Wait for SW to be fully active before subscribing to push.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      reg.addEventListener('updatefound', () => {
+        const newSW = reg.installing;
+        if (newSW) newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller)
+            newSW.postMessage({ type: 'SKIP_WAITING' });
+        });
+      });
+    } catch (e) { console.warn('SW registration failed:', e); }
+  });
 }
 
 // Pre-fill "your name" on setup screen from auth metadata
