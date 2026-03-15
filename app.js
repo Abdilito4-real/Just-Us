@@ -282,6 +282,7 @@ db.auth.onAuthStateChange(async (event, session) => {
   if (event === 'SIGNED_OUT') {
     _appBooted = false; currentUser = null; userProfile = null; partnerProfile = null;
     stopPresenceHeartbeat();
+    if (_tickPollInterval) { clearInterval(_tickPollInterval); _tickPollInterval = null; }
     db.removeAllChannels();
     document.removeEventListener('visibilitychange', handleVisibility);
     document.removeEventListener('visibilitychange', handleVisibilityRead);
@@ -973,8 +974,38 @@ async function sendSpecial(type, content, extra = {}) {
 }
 
 // ── Realtime ───────────────────────────────────
+let _tickPollInterval = null;
+
+// Polling fallback — checks every 4s if any of our sent messages
+// have been delivered/read but the tick hasn't updated in the UI yet.
+// This handles the case where realtime UPDATE events are missed.
+function startTickPoller() {
+  if (_tickPollInterval) clearInterval(_tickPollInterval);
+  _tickPollInterval = setInterval(async () => {
+    if (!currentUser || document.hidden) return;
+    // Find all bubble-wraps that still show "sent" or "delivered" state
+    const sentWraps = [...document.querySelectorAll('.bubble-wrap.mine')].filter(w => {
+      const tick = w.querySelector('.read-tick');
+      return tick && !tick.classList.contains('read');
+    });
+    if (!sentWraps.length) return;
+    const ids = sentWraps.map(w => w.dataset.id).filter(Boolean);
+    if (!ids.length) return;
+    const { data } = await db.from('messages')
+      .select('id, delivered_at, read_at')
+      .in('id', ids)
+      .eq('sender_id', currentUser.id);
+    if (!data) return;
+    data.forEach(m => {
+      if (m.read_at)           updateReadTickInUI(m.id);
+      else if (m.delivered_at) updateDeliveredTickInUI(m.id);
+    });
+  }, 4000);
+}
+
 function subscribeRealtime() {
   if (realtimeSub) { db.removeChannel(realtimeSub); realtimeSub = null; }
+  startTickPoller(); // start polling fallback alongside realtime
   realtimeSub = db.channel('our-space-main')
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
       const msg = payload.new;
@@ -987,8 +1018,6 @@ function subscribeRealtime() {
       renderMessage(msg); scrollToBottom(); hideTypingUI();
       if (notifSound) notifSound();
       if (navigator.vibrate) navigator.vibrate(50);
-      // Mark delivered immediately (app is open = message received)
-      // Mark read only if app is visible
       const now = new Date().toISOString();
       if (!document.hidden) {
         db.from('messages').update({ delivered_at: now, read_at: now }).eq('id', msg.id);
@@ -1002,7 +1031,7 @@ function subscribeRealtime() {
 
       // Tick updates on my own sent messages
       if (u.sender_id === currentUser.id) {
-        if (u.read_at)      updateReadTickInUI(u.id);
+        if (u.read_at)           updateReadTickInUI(u.id);
         else if (u.delivered_at) updateDeliveredTickInUI(u.id);
       }
 
