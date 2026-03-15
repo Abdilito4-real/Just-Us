@@ -1,21 +1,24 @@
 // ════════════════════════════════════════
-//  OUR SPACE — Service Worker
-//  Handles: offline cache + push notifications
+//  OUR SPACE — Service Worker  v3
+//  Offline cache + VAPID push notifications
 // ════════════════════════════════════════
-const CACHE = 'our-space-v2';
+const CACHE = 'our-space-v3';
 const ASSETS = [
-  '/', '/index.html', '/app.js', '/manifest.json', '/icon-192.png', '/icon-512.png'
+  '/', '/index.html', '/app.js', '/style.css', '/manifest.json',
+  '/icon-192.png', '/icon-512.png'
 ];
 
-// ── Install: pre-cache static assets ──────────
+// ── Install ────────────────────────────────────
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(ASSETS.filter(a => !a.endsWith('.png'))))
+    caches.open(CACHE).then(c =>
+      c.addAll(ASSETS.filter(a => !a.endsWith('.png')))
+    )
   );
   self.skipWaiting();
 });
 
-// ── Activate: clear old caches ─────────────────
+// ── Activate ───────────────────────────────────
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -25,10 +28,9 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// ── Fetch: network-first, fallback to cache ────
+// ── Fetch ──────────────────────────────────────
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
-  // Don't cache Supabase API or CDN calls
   if (e.request.url.includes('supabase') || e.request.url.includes('fonts.gstatic')) return;
   e.respondWith(
     fetch(e.request)
@@ -41,44 +43,94 @@ self.addEventListener('fetch', e => {
   );
 });
 
-// ── Message: show notification from app ────────
+// ── In-app notification (from app via postMessage) ─
 self.addEventListener('message', e => {
   if (e.data && e.data.type === 'SHOW_NOTIFICATION') {
-    const { title, body, icon, badge, tag, renotify } = e.data;
+    const { title, body, icon, badge, tag, renotify, data } = e.data;
     self.registration.showNotification(title, {
       body, icon, badge, tag, renotify,
       vibrate: [100, 50, 100],
-      data: { url: self.location.origin },
+      data: data || { url: self.location.origin },
+      requireInteraction: false,
     });
   }
 });
 
-// ── Push: handle server-sent push events ───────
-// (Only needed if you add a push server / VAPID backend)
+// ── VAPID Push ─────────────────────────────────
+// Fires even when the app is CLOSED or in background.
+// Same mechanism WhatsApp uses.
 self.addEventListener('push', e => {
-  let payload = { title: 'Our Space 💛', body: 'New message from your babe ❤️' };
-  try { if (e.data) payload = { ...payload, ...e.data.json() }; } catch(err) {}
+  let payload = {
+    title: 'Our Space 💛',
+    body: 'New message from your babe ❤️',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: 'our-space-msg',
+    data: { url: self.location.origin },
+  };
+
+  try {
+    if (e.data) {
+      const received = e.data.json();
+      payload = { ...payload, ...received };
+    }
+  } catch (err) {
+    try { if (e.data) payload.body = e.data.text(); } catch (_) {}
+  }
+
   e.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body:    payload.body,
-      icon:    '/icon-192.png',
-      badge:   '/icon-192.png',
-      tag:     'our-space-msg',
-      renotify: true,
-      vibrate: [100, 50, 100],
-      data: { url: self.location.origin },
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      const appFocused = clients.some(c =>
+        c.url.startsWith(self.location.origin) && c.focused
+      );
+      if (appFocused) return; // App is open and focused — skip OS banner
+
+      return self.registration.showNotification(payload.title, {
+        body:               payload.body,
+        icon:               payload.icon  || '/icon-192.png',
+        badge:              payload.badge || '/icon-192.png',
+        tag:                payload.tag   || 'our-space-msg',
+        renotify:           true,
+        vibrate:            [100, 50, 100, 50, 100],
+        requireInteraction: false,
+        data:               payload.data || { url: self.location.origin },
+        actions:            [{ action: 'open', title: 'Open' }],
+      });
     })
   );
 });
 
-// ── Notification click: focus or open app ──────
+// ── Notification click ─────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const targetUrl = e.notification.data?.url || self.location.origin;
+
   e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       const existing = list.find(c => c.url.startsWith(self.location.origin));
-      if (existing) return existing.focus();
-      return clients.openWindow(e.notification.data?.url || self.location.origin);
+      if (existing) {
+        existing.focus();
+        existing.postMessage({ type: 'NOTIFICATION_CLICK' });
+        return;
+      }
+      return self.clients.openWindow(targetUrl);
     })
+  );
+});
+
+// ── Push subscription rotation (iOS/Chrome may do this) ──
+self.addEventListener('pushsubscriptionchange', e => {
+  e.waitUntil(
+    self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: e.oldSubscription?.options?.applicationServerKey,
+    }).then(sub => {
+      return self.clients.matchAll({ type: 'window' }).then(clients => {
+        clients.forEach(c => c.postMessage({
+          type: 'PUSH_SUBSCRIPTION_CHANGED',
+          subscription: sub.toJSON(),
+        }));
+      });
+    }).catch(() => {})
   );
 });
