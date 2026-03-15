@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0a0a" />
   <meta name="description" content="Our Space — just the two of us." />
+  <meta name="author" content="Iconic_abdallah" />
 
   <!-- iOS PWA full-screen mode -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -226,16 +227,19 @@
       width: 10px; height: 10px; border-radius: 50%;
       border: 2px solid var(--bg); transition: background 0.4s;
     }
-    .presence-dot.online  { background: #4ade80; }
-    .presence-dot.away    { background: #facc15; }
+    .presence-dot.online  { background: #4ade80; box-shadow: 0 0 0 2px rgba(74,222,128,0.25); }
     .presence-dot.offline { background: #444; }
+    /* No yellow "away" dot — we treat away as offline visually */
     .header-info h3 {
       font-family: 'Cormorant Garamond', serif;
       font-size: 1.05rem; font-weight: 400; line-height: 1; color: var(--text);
     }
-    .header-info .status-line { font-size: 0.68rem; color: var(--text-dim); margin-top: 2px; transition: color 0.4s; }
+    .header-info .status-line {
+      font-size: 0.68rem; color: var(--text-dim);
+      margin-top: 2px; transition: color 0.4s;
+    }
     .header-info .status-line[data-status="online"] { color: #4ade80; }
-    .header-info .status-line[data-status="away"]   { color: #facc15; }
+    /* no special colour for away/offline — shows grey with last seen text */
     .header-right { display: flex; gap: 0.4rem; }
     .icon-btn {
       width: 44px; height: 44px; border-radius: 50%;
@@ -355,18 +359,35 @@
     }
     .bubble-wrap.mine  .bubble-meta { justify-content: flex-end; }
     .bubble-wrap.theirs .bubble-meta { justify-content: flex-start; }
+    /* ── Message tick indicators ─────────────────── */
     .read-tick {
-      display: flex; align-items: center; line-height: 1;
-      transition: opacity 0.2s;
+      display: inline-flex; align-items: center;
+      flex-shrink: 0; margin-left: 2px;
+      line-height: 1; vertical-align: middle;
     }
-    /* single grey = sent to server */
-    .read-tick.sent       svg path { stroke: #555; }
-    /* double grey = delivered to device */
-    .read-tick.delivered  svg path { stroke: #777; }
-    /* double gold = partner read it */
-    .read-tick.read       svg path { stroke: var(--gold); }
-    /* subtle glow on read */
-    .read-tick.read svg { filter: drop-shadow(0 0 2px rgba(212,175,55,0.5)); }
+    .read-tick svg {
+      display: block; overflow: visible;
+      transition: filter 0.35s ease;
+    }
+    /* Sent — muted, low opacity */
+    .read-tick.sent svg   { opacity: 0.55; }
+    /* Delivered — slightly more visible */
+    .read-tick.delivered svg { opacity: 0.75; }
+    /* Read — full gold, gentle glow */
+    .read-tick.read svg {
+      opacity: 1;
+      filter: drop-shadow(0 0 2.5px rgba(212,175,55,0.5));
+    }
+    /* Spring bounce when tick state upgrades */
+    .read-tick.tick-bump {
+      animation: tick-bump 0.4s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes tick-bump {
+      0%   { transform: scale(0.55); opacity: 0.3; }
+      55%  { transform: scale(1.18); }
+      80%  { transform: scale(0.95); }
+      100% { transform: scale(1);    opacity: 1; }
+    }
     /* Day separator override for dynamically inserted ones */
     .day-sep { margin: 0.5rem 0; }
 
@@ -1037,7 +1058,7 @@
     }
     .ld-subtitle {
       font-size: 0.7rem; letter-spacing: 0.28em; text-transform: uppercase;
-      color: var(--text-faint); margin-top: 0.45rem;
+      color: var(--text-dim); margin-top: 0.45rem;
       animation: ld-fade-in 0.6s 0.3s ease both;
     }
 
@@ -1227,6 +1248,31 @@
       display: flex; align-items: center; justify-content: center;
       color: #fff; font-size: 1.4rem; font-weight: 500;
     }
+
+    /* ── Builder credit ──────────────────────────── */
+    .builder-credit {
+      position: fixed; bottom: calc(1.2rem + var(--sab, 0px));
+      left: 0; right: 0; text-align: center; pointer-events: none;
+      z-index: 0;
+    }
+    .builder-credit span {
+      font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--text-faint); opacity: 0.55;
+    }
+    .builder-credit em {
+      font-style: normal; color: var(--gold); opacity: 0.7;
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 0.72rem; letter-spacing: 0.08em;
+    }
+
+    .about-feature {
+      font-size: 0.8rem; color: var(--text-dim);
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.4rem 0.7rem;
+      background: var(--surface2); border-radius: 8px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
   </style>
 </head>
 <body>
@@ -1300,6 +1346,7 @@
   <div class="config-notice">
     ⚙️ Open <code>app.js</code>, set your <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code>, then run the SQL in <code>schema.sql</code> before using.
   </div>
+  <div class="builder-credit"><span>crafted with love by </span><em>Iconic_abdallah</em></div>
 </div>
 
 <!-- ═══ SETUP ═══ -->
@@ -1354,6 +1401,9 @@
       <button class="icon-btn" onclick="openDailyPrompt()" title="Daily spark">
         <svg viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
       </button>
+      <button class="icon-btn" onclick="showAbout()" title="About">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+      </button>
       <button class="icon-btn" onclick="signOut()" title="Sign out">
         <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
       </button>
@@ -1364,7 +1414,6 @@
     <button class="aff-btn" onclick="sendHug()"><span class="e">🤗</span> Hug</button>
     <button class="aff-btn" onclick="sendHeartbeat()"><span class="e">💓</span> Heartbeat</button>
     <button class="aff-btn" onclick="openMoodModal()"><span class="e">🌙</span> Mood</button>
-    <button class="aff-btn" onclick="sendGesture('kiss','💋','sent you a kiss')"><span class="e">💋</span> Kiss</button>
     <button class="aff-btn" onclick="sendGesture('thinking','🌸','is thinking of you')"><span class="e">🌸</span> Thinking of you</button>
   </div>
 
@@ -1569,6 +1618,43 @@
 </div>
 <!-- Hidden image file input -->
 <input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="onImageSelected(event)" />
+
+<!-- ABOUT MODAL -->
+<div class="modal-overlay" id="about-modal">
+  <div class="modal" style="text-align:center; gap:1.2rem; align-items:center">
+    <button class="modal-close" onclick="closeModal('about-modal')" style="align-self:flex-end">✕</button>
+
+    <div style="font-size:2.8rem; line-height:1">◈</div>
+
+    <div>
+      <h3 style="font-size:1.8rem; letter-spacing:0.1em; color:var(--gold)">Our Space</h3>
+      <p style="font-size:0.7rem; letter-spacing:0.22em; text-transform:uppercase; color:var(--text); margin-top:0.3rem">
+        just the two of us
+      </p>
+    </div>
+
+    <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:1rem 1.2rem; width:100%">
+      <p style="font-size:0.72rem; color:var(--text-dim); letter-spacing:0.05em; margin-bottom:0.55rem; text-transform:uppercase">
+        Developed by
+      </p>
+      <p style="font-family:'Cormorant Garamond',serif; font-size:1.5rem; font-weight:400; color:var(--text); letter-spacing:0.08em">
+        Iconic_abdallah
+      </p>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:0.3rem; width:100%">
+      <div class="about-feature">💬 Real-time chat</div>
+      <div class="about-feature">🎙 Voice notes</div>
+      <div class="about-feature">🖼 Image sharing</div>
+      <div class="about-feature">✨ Stickers &amp; Mood</div>
+      <div class="about-feature">✓✓ Delivery receipts</div>
+    </div>
+
+    <p style="font-size:0.62rem; color:var(--text-faint); letter-spacing:0.12em">
+      A private space. Forever yours. ✦
+    </p>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>
