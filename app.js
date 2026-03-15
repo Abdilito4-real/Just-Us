@@ -941,13 +941,13 @@ async function sendMessage() {
   }
 
   const { data, error } = await db.from('messages').insert(row).select().single();
-  if (!error && data) { renderMessage(data); scrollToBottom(); }
+  if (!error && data) { renderMessage(data); scrollToBottom(); sendPushToPartner(data); }
 }
 
 async function sendSpecial(type, content, extra = {}) {
   const { data, error } = await db.from('messages')
     .insert({ sender_id: currentUser.id, type, content, ...extra }).select().single();
-  if (!error && data) { renderMessage(data); scrollToBottom(); }
+  if (!error && data) { renderMessage(data); scrollToBottom(); sendPushToPartner(data); }
 }
 
 // ── Realtime ───────────────────────────────────
@@ -1177,30 +1177,281 @@ function playVoice(url, btn) {
   audio.onended = () => { btn.innerHTML='<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'; currentAudio=null; };
 }
 
-// ── Push Notifications ─────────────────────────
-async function requestPushPermission() {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'default') {
-    setTimeout(async () => {
-      const p = await Notification.requestPermission();
-      if (p === 'granted') showToast('🔔','Notifications on!');
-    }, 3000);
+// ═══════════════════════════════════════════════════════════════
+//  PUSH NOTIFICATIONS — VAPID (WhatsApp-style background push)
+//
+//  How it works:
+//  1. On app start we request notification permission + subscribe
+//     the service worker to the push server using your VAPID public key.
+//  2. The subscription (endpoint + keys) is saved to Supabase.
+//  3. When you send a message, the app calls the Edge Function
+//     "send-push" which signs + sends a Web Push to your partner's
+//     saved subscription.  This fires even when their app is closed.
+//  4. The service worker's "push" handler receives it and shows
+//     the OS notification banner — exactly like WhatsApp.
+//
+//  SETUP:  Put your VAPID public key in VAPID_PUBLIC_KEY below.
+//  See README_PUSH.md for how to generate your VAPID keys.
+// ═══════════════════════════════════════════════════════════════
+
+// ── YOUR VAPID PUBLIC KEY ───────────────────────────────────────
+// Replace this with your own key.  Generate at:
+//   npx web-push generate-vapid-keys
+// Or use: https://vapidkeys.com
+// Then set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
+// as secrets in Supabase → Edge Functions → Secrets.
+const VAPID_PUBLIC_KEY = 'BNTTu-CxpWI1q3WLMAFH4yy42x9v0hX59kCYOjIrsibSLzquDRsKW7SPuSPwFsc5eCkdLj_heuaYr9JfrSonRDo';
+
+// ── State ───────────────────────────────────────────────────────
+let _pushSubscription = null; // current PushSubscription object
+
+// ── Subscribe to VAPID push ─────────────────────────────────────
+async function subscribeToPush() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+    // VAPID key not configured yet
+    if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
+
+    const reg = await navigator.serviceWorker.ready;
+
+    // Check if already subscribed
+    let sub = await reg.pushManager.getSubscription();
+
+    if (!sub) {
+      // Subscribe — this shows the "Allow notifications?" prompt on iOS 16.4+
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+
+    _pushSubscription = sub;
+    await savePushSubscription(sub);
+    return sub;
+  } catch (err) {
+    // Common reasons: iOS < 16.4, not installed as PWA, user denied
+    console.warn('Push subscribe failed:', err.message || err);
   }
 }
+
+// ── Save subscription to Supabase ──────────────────────────────
+async function savePushSubscription(sub) {
+  if (!currentUser || !sub) return;
+  const json = sub.toJSON();
+  await db.from('push_subscriptions').upsert({
+    user_id:    currentUser.id,
+    endpoint:   json.endpoint,
+    p256dh:     json.keys.p256dh,
+    auth:       json.keys.auth,
+    user_agent: navigator.userAgent.slice(0, 200),
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'endpoint' });
+}
+
+// ── Request permission then subscribe ──────────────────────────
+async function requestPushPermission() {
+  if (!('Notification' in window)) return;
+
+  // iOS Safari requires the app to be installed as a PWA
+  // to use push notifications (iOS 16.4+).
+  // We always show the install prompt if not installed.
+  checkInstallState();
+
+  if (Notification.permission === 'denied') return;
+
+  if (Notification.permission === 'default') {
+    // Delay so user has a moment to orient themselves
+    setTimeout(async () => {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isInstalled = window.matchMedia('(display-mode: standalone)').matches
+                       || window.navigator.standalone === true;
+
+      // On iOS, push only works when installed as PWA — don't ask until then
+      if (isIOS && !isInstalled) return;
+
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        showToast('🔔', 'Notifications on!');
+        await subscribeToPush();
+      }
+    }, 3000);
+    return;
+  }
+
+  // Already granted — just make sure we're subscribed
+  if (Notification.permission === 'granted') {
+    await subscribeToPush();
+  }
+}
+
+// ── Send push via Edge Function ─────────────────────────────────
+// Called after every outgoing message so partner gets a background push.
+async function sendPushToPartner(msg) {
+  if (!partnerProfile?.id) return;
+  if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
+
+  const senderName = userProfile?.display_name || 'Babe';
+  const bodyMap = {
+    heartbeat: `${senderName} sent you a heartbeat 💓`,
+    hug:       `${senderName} is hugging you 🤗`,
+    kiss:      `${senderName} blew you a kiss 💋`,
+    thinking:  `${senderName} is thinking of you 🌸`,
+    affection: msg.content,
+    voice:     `${senderName} sent a voice note 🎙`,
+    image:     `${senderName} sent a photo 🖼`,
+    images:    `${senderName} sent photos 🖼`,
+    sticker:   `${senderName} sent a sticker ${msg.content}`,
+    text:      msg.content,
+  };
+  const body = bodyMap[msg.type] || msg.content || 'New message';
+
+  try {
+    await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${(await db.auth.getSession()).data.session?.access_token}`,
+        'apikey': SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({
+        recipientId: partnerProfile.id,
+        title: 'Our Space 💛',
+        body,
+        tag: 'our-space-msg',
+      }),
+    });
+  } catch (e) {
+    // Push is best-effort — never block message send
+  }
+}
+
+// ── In-app notification (app is open but backgrounded) ─────────
 function triggerNotification(msg) {
   if (!document.hidden) return;
   if (Notification.permission !== 'granted') return;
   const senderName = userProfile?.partner_name || 'Babe';
   const bodyMap = {
-    heartbeat:`${senderName} sent you a heartbeat 💓`, hug:`${senderName} is hugging you 🤗`,
-    kiss:`${senderName} blew you a kiss 💋`, thinking:`${senderName} is thinking of you 🌸`,
-    affection:msg.content, voice:`${senderName} sent a voice note 🎙`, text:msg.content,
+    heartbeat: `${senderName} sent you a heartbeat 💓`,
+    hug:       `${senderName} is hugging you 🤗`,
+    kiss:      `${senderName} blew you a kiss 💋`,
+    thinking:  `${senderName} is thinking of you 🌸`,
+    affection: msg.content,
+    voice:     `${senderName} sent a voice note 🎙`,
+    text:      msg.content,
   };
   const body = bodyMap[msg.type] || msg.content;
-  const opts = { body, icon:'icon-192.png', badge:'icon-192.png', tag:'our-space-msg', renotify:true };
+  const opts = {
+    body, icon: 'icon-192.png', badge: 'icon-192.png',
+    tag: 'our-space-msg', renotify: true,
+    data: { url: window.location.href },
+  };
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage({ type:'SHOW_NOTIFICATION', title:'Our Space 💛', ...opts });
-  } else { try { new Notification('Our Space 💛', opts); } catch(e){} }
+    navigator.serviceWorker.controller.postMessage({ type: 'SHOW_NOTIFICATION', title: 'Our Space 💛', ...opts });
+  } else {
+    try { new Notification('Our Space 💛', opts); } catch (e) {}
+  }
+}
+
+// ── Listen for messages from SW ─────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'NOTIFICATION_CLICK') {
+      scrollToBottom(true);
+    }
+    if (e.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
+      // SW rotated our subscription — save the new one
+      const raw = e.data.subscription;
+      if (raw && currentUser) {
+        db.from('push_subscriptions').upsert({
+          user_id: currentUser.id,
+          endpoint: raw.endpoint,
+          p256dh: raw.keys?.p256dh,
+          auth: raw.keys?.auth,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'endpoint' });
+      }
+    }
+  });
+}
+
+// ── VAPID key helper ────────────────────────────────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return new Uint8Array([...rawData].map(c => c.charCodeAt(0)));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  INSTALL PROMPT (Add to Home Screen)
+//  Shows a banner for Android (using beforeinstallprompt) and
+//  an iOS instruction sheet since iOS has no automatic prompt.
+// ═══════════════════════════════════════════════════════════════
+let _deferredInstallPrompt = null; // Android/Chrome deferred event
+
+// Capture Android install prompt
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  showInstallBanner('android');
+});
+
+window.addEventListener('appinstalled', () => {
+  _deferredInstallPrompt = null;
+  hideInstallBanner();
+  showToast('💛', 'Our Space installed!');
+  // Re-subscribe push now that we are installed
+  setTimeout(() => subscribeToPush(), 1500);
+});
+
+function checkInstallState() {
+  const isInstalled = window.matchMedia('(display-mode: standalone)').matches
+                   || window.navigator.standalone === true;
+  if (isInstalled) { hideInstallBanner(); return; }
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+  if (isIOS && isSafari) {
+    // Show iOS-specific instructions
+    showInstallBanner('ios');
+  }
+  // Android/Chrome: install banner shown via beforeinstallprompt event
+}
+
+function showInstallBanner(type) {
+  // Don't spam — only show once per session
+  if (sessionStorage.getItem('install-banner-shown')) return;
+  sessionStorage.setItem('install-banner-shown', '1');
+
+  const banner = document.getElementById('install-banner');
+  if (!banner) return;
+
+  if (type === 'ios') {
+    document.getElementById('install-android-row').style.display = 'none';
+    document.getElementById('install-ios-row').style.display = 'flex';
+  } else {
+    document.getElementById('install-android-row').style.display = 'flex';
+    document.getElementById('install-ios-row').style.display = 'none';
+  }
+
+  banner.classList.add('show');
+}
+
+function hideInstallBanner() {
+  document.getElementById('install-banner')?.classList.remove('show');
+}
+
+async function triggerInstall() {
+  if (_deferredInstallPrompt) {
+    _deferredInstallPrompt.prompt();
+    const { outcome } = await _deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') hideInstallBanner();
+    _deferredInstallPrompt = null;
+  } else {
+    hideInstallBanner();
+  }
 }
 
 // ── UI Helpers ─────────────────────────────────
@@ -1260,7 +1511,82 @@ document.addEventListener('DOMContentLoaded', () => {
   );
 });
 function showAbout() { openModal('about-modal'); }
-function openSettings() { openModal('settings-modal'); }
+function openSettings() {
+  updateSettingsNotifUI();
+  updateSettingsInstallUI();
+  openModal('settings-modal');
+}
+
+function updateSettingsNotifUI() {
+  const btn = document.getElementById('notif-settings-btn');
+  const sub = document.getElementById('notif-settings-sub');
+  if (!btn || !sub) return;
+  const perm = ('Notification' in window) ? Notification.permission : 'unsupported';
+  if (perm === 'granted') {
+    sub.textContent = _pushSubscription ? 'Push notifications active ✓' : 'Granted — re-subscribe below';
+    btn.style.opacity = _pushSubscription ? '0.55' : '1';
+  } else if (perm === 'denied') {
+    sub.textContent = 'Blocked — enable in phone Settings';
+    btn.style.opacity = '0.55';
+  } else {
+    sub.textContent = 'Tap to allow push notifications';
+    btn.style.opacity = '1';
+  }
+  // Hide on unsupported
+  btn.style.display = perm === 'unsupported' ? 'none' : '';
+}
+
+function updateSettingsInstallUI() {
+  const btn = document.getElementById('install-settings-btn');
+  if (!btn) return;
+  const isInstalled = window.matchMedia('(display-mode: standalone)').matches
+                   || window.navigator.standalone === true;
+  if (isInstalled) {
+    btn.querySelector('.do-sub').textContent = 'Already installed ✓';
+    btn.style.opacity = '0.55';
+  } else {
+    btn.querySelector('.do-sub').textContent = 'Install app for best experience';
+    btn.style.opacity = '1';
+  }
+}
+
+async function handleNotifSettingsBtn() {
+  const perm = ('Notification' in window) ? Notification.permission : 'unsupported';
+  if (perm === 'denied') {
+    showToast('⚙️', 'Enable in your phone Settings → Notifications');
+    return;
+  }
+  if (perm === 'default') {
+    const result = await Notification.requestPermission();
+    if (result === 'granted') {
+      await subscribeToPush();
+      showToast('🔔', 'Notifications on!');
+    }
+  } else if (perm === 'granted') {
+    await subscribeToPush();
+    showToast('🔔', 'Push subscription refreshed!');
+  }
+  updateSettingsNotifUI();
+}
+
+function handleInstallSettingsBtn() {
+  closeModal('settings-modal');
+  const isInstalled = window.matchMedia('(display-mode: standalone)').matches
+                   || window.navigator.standalone === true;
+  if (isInstalled) {
+    showToast('✓', 'Already installed!');
+    return;
+  }
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (isIOS) {
+    sessionStorage.removeItem('install-banner-shown'); // force show
+    showInstallBanner('ios');
+  } else if (_deferredInstallPrompt) {
+    triggerInstall();
+  } else {
+    showToast('📲', 'Use your browser\'s install option');
+  }
+}
 
 let toastTimer;
 function showToast(icon, text) {
