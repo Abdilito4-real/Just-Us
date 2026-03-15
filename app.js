@@ -597,6 +597,8 @@ async function initApp() {
   await updatePresence('online');
   startPresenceHeartbeat();
   requestPushPermission();
+  // Mark all undelivered messages as delivered immediately on open
+  setTimeout(() => markAllDelivered(), 500);
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
   updateActionBtn(); // ensure mic shown on fresh load
@@ -606,7 +608,14 @@ async function initApp() {
   });
 }
 
-function handleVisibility()      { updatePresence(document.hidden ? 'away' : 'online'); }
+function handleVisibility() {
+  updatePresence(document.hidden ? 'away' : 'online');
+  if (!document.hidden) {
+    // App came to foreground — immediately mark delivered + read
+    markAllDelivered();
+    markAllRead();
+  }
+}
 async function handleVisibilityRead() { if (!document.hidden) await markAllRead(); }
 
 function setupDateDivider() {
@@ -896,9 +905,22 @@ function tickState(msg) {
 
 async function markAllRead() {
   if (!currentUser || !partnerProfile || document.hidden) return;
+  const now = new Date().toISOString();
+  // Mark both delivered_at and read_at in one update so tick jumps directly to read
   await db.from('messages')
-    .update({ read_at: new Date().toISOString() })
-    .eq('sender_id', partnerProfile.id).is('read_at', null);
+    .update({ delivered_at: now, read_at: now })
+    .eq('sender_id', partnerProfile.id)
+    .is('read_at', null);
+}
+
+// Mark messages as delivered (app opened but not necessarily visible)
+async function markAllDelivered() {
+  if (!currentUser || !partnerProfile) return;
+  const now = new Date().toISOString();
+  await db.from('messages')
+    .update({ delivered_at: now })
+    .eq('sender_id', partnerProfile.id)
+    .is('delivered_at', null);
 }
 function updateTickInUI(msgId, state) {
   const wrap = document.querySelector(`.bubble-wrap[data-id="${msgId}"]`);
