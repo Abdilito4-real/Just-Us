@@ -1260,6 +1260,7 @@ document.addEventListener('DOMContentLoaded', () => {
   );
 });
 function showAbout() { openModal('about-modal'); }
+function openSettings() { openModal('settings-modal'); }
 
 let toastTimer;
 function showToast(icon, text) {
