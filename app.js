@@ -907,14 +907,12 @@ function tickState(msg) {
 async function markAllRead() {
   if (!currentUser || !partnerProfile || document.hidden) return;
   const now = new Date().toISOString();
-  // Mark both delivered_at and read_at in one update so tick jumps directly to read
   await db.from('messages')
     .update({ delivered_at: now, read_at: now })
     .eq('sender_id', partnerProfile.id)
     .is('read_at', null);
 }
 
-// Mark messages as delivered (app opened but not necessarily visible)
 async function markAllDelivered() {
   if (!currentUser || !partnerProfile) return;
   const now = new Date().toISOString();
@@ -989,13 +987,12 @@ let _tickPollInterval = null;
 // This handles the case where realtime UPDATE events are missed.
 function startTickPoller() {
   if (_tickPollInterval) clearInterval(_tickPollInterval);
-  _tickPollInterval = setInterval(() => refreshAllTicks(), 2500);
+  // Poll every 3s — catches anything realtime misses
+  _tickPollInterval = setInterval(() => refreshAllTicks(), 3000);
 }
 
-// Immediately refresh all visible sent-message ticks from DB
 async function refreshAllTicks() {
-  if (!currentUser || document.hidden) return;
-  // Get ALL my sent bubbles that aren't showing gold read ticks yet
+  if (!currentUser) return;
   const pendingWraps = [...document.querySelectorAll('.bubble-wrap.mine')].filter(w => {
     const tick = w.querySelector('.read-tick');
     return tick && !tick.classList.contains('read');
