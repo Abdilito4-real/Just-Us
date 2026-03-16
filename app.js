@@ -17,11 +17,6 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const { createClient } = supabase;
 
 // ── Custom storage: bypasses Supabase navigator.locks wrapper ─────────────
-// The default gotrue-js storage wraps every localStorage read/write inside
-// navigator.locks.request().  In PWAs, iOS WebViews and some Chromium builds
-// that lock times out (5 s) then forcibly steals itself → AbortError cascade.
-// Providing our own plain synchronous adapter removes the lock entirely while
-// still persisting the session across refreshes / app re-opens.
 const _customStorage = {
   getItem:    (k)    => { try { return localStorage.getItem(k);       } catch(_) { return null; } },
   setItem:    (k, v) => { try { localStorage.setItem(k, v);           } catch(_) {} },
@@ -30,12 +25,12 @@ const _customStorage = {
 
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    persistSession:     true,        // stay logged in across refresh / PWA reopen
+    persistSession:     true,
     detectSessionInUrl: false,
     autoRefreshToken:   true,
-    flowType:           'implicit',  // no PKCE code-verifier needed
-    storage:            _customStorage, // ← plain sync adapter, no lock
-    storageKey:         'our-space-auth', // ← unique key, avoids collisions
+    flowType:           'implicit',
+    storage:            _customStorage,
+    storageKey:         'our-space-auth',
   },
   realtime: { params: { eventsPerSecond: 10 } },
 });
@@ -56,18 +51,19 @@ let presenceInterval = null;
 let promptIndex      = 0;
 let notifSound       = null;
 let currentAudio     = null;
-let _appBooted       = false; // prevents double-init
+let _appBooted       = false;
+let _tickPollInterval = null;
 
 // ═══════════════════════════════════════════════════════════════
 //  LOADER ENGINE — step-by-step progress feedback
 // ═══════════════════════════════════════════════════════════════
 const LD_STEPS = [
-  { pct: 0,   label: 'Starting up…'              },  // 0 — initial
-  { pct: 18,  label: 'Checking your session…'    },  // 1
-  { pct: 38,  label: 'Restoring your profile…'   },  // 2
-  { pct: 58,  label: 'Connecting to your space…' },  // 3
-  { pct: 80,  label: 'Loading messages…'         },  // 4
-  { pct: 100, label: 'Almost there ✦'            },  // 5
+  { pct: 0,   label: 'Starting up…'              },
+  { pct: 18,  label: 'Checking your session…'    },
+  { pct: 38,  label: 'Restoring your profile…'   },
+  { pct: 58,  label: 'Connecting to your space…' },
+  { pct: 80,  label: 'Loading messages…'         },
+  { pct: 100, label: 'Almost there ✦'            },
 ];
 
 let _ldCurrent = 0;
@@ -92,7 +88,6 @@ function ldStep(idx) {
   }
   if (barEl) barEl.style.width = step.pct + '%';
 
-  // Animate percentage counter smoothly
   const target = step.pct;
   if (_ldAnimFrame) cancelAnimationFrame(_ldAnimFrame);
   function tick() {
@@ -104,7 +99,6 @@ function ldStep(idx) {
   }
   tick();
 
-  // Update dots
   for (let i = 0; i < LD_STEPS.length; i++) {
     const dot = document.getElementById('ld-dot-' + i);
     if (!dot) continue;
@@ -114,7 +108,6 @@ function ldStep(idx) {
   }
 }
 
-// Update step text without changing the bar (for slow connection messages)
 function ldSetMessage(msg) {
   const textEl = document.getElementById('ld-step-text');
   if (!textEl) return;
@@ -122,7 +115,6 @@ function ldSetMessage(msg) {
   setTimeout(() => { textEl.textContent = msg; textEl.style.opacity = '1'; }, 180);
 }
 
-// Show a tappable error state on the loader
 function ldError(msg, onRetry) {
   const textEl = document.getElementById('ld-step-text');
   const pctEl  = document.getElementById('ld-step-pct');
@@ -137,7 +129,6 @@ function ldError(msg, onRetry) {
       textEl.style.cursor = 'pointer';
       textEl.style.opacity = '1';
       textEl.onclick = () => {
-        // Reset bar colour + message and retry
         if (barEl)  { barEl.style.width = '18%'; barEl.style.background = ''; }
         if (pctEl)  pctEl.textContent = '18%';
         textEl.style.color  = '';
@@ -165,13 +156,8 @@ function ldDone(callback) {
   }, 420);
 }
 
-// Kick off step 1 immediately on script load
 ldStep(1);
 
-
-// ── Suppress residual AbortError from supabase-js internals ─────────────
-// Even with custom storage, the library may fire one AbortError on first
-// load from a stale lock state. Catch it here so it never appears in console.
 window.addEventListener('unhandledrejection', (e) => {
   if (e?.reason?.name === 'AbortError') {
     e.preventDefault();
@@ -221,34 +207,20 @@ const PROMPTS = [
 
 // ═══════════════════════════════════════════════
 //  BOOTSTRAP
-//  Problem: onAuthStateChange fires INITIAL_SESSION
-//  with session=null before localStorage is read,
-//  which incorrectly shows the login screen even
-//  when a session is stored.
-//
-//  Fix: check localStorage ourselves synchronously
-//  BEFORE registering the listener. If a session key
-//  exists we show a "loading" screen immediately so
-//  the user never sees the login screen flash.
-//  The listener then boots the app when ready.
 // ═══════════════════════════════════════════════
 
-// Show loading screen immediately if we have a stored session
 (function checkStoredSession() {
   try {
     const raw = localStorage.getItem('our-space-auth');
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Supabase stores { access_token, user, ... } or { currentSession: {...} }
       const hasToken = parsed?.access_token || parsed?.currentSession?.access_token;
       if (hasToken) {
-        // We have a stored session — show loading, never flash login screen
         showScreen('loading-screen');
         return;
       }
     }
   } catch(_) {}
-  // No stored session → show login right away
   showScreen('auth-screen');
 })();
 
@@ -260,9 +232,7 @@ db.auth.onAuthStateChange(async (event, session) => {
       if (_appBooted && currentUser?.id === session.user.id) return;
       currentUser = session.user;
       _appBooted  = true;
-      ldStep(2); // "Restoring your profile…"
-      // Yield to the event loop so the Supabase client finishes initialising
-      // its fetch queue before we hit the DB — prevents silent hang
+      ldStep(2);
       setTimeout(() => loadProfile(), 0);
     } else {
       ldDone(() => showScreen('auth-screen'));
@@ -274,7 +244,7 @@ db.auth.onAuthStateChange(async (event, session) => {
     if (session?.user) {
       currentUser = session.user;
       _appBooted  = true;
-      ldStep(2); // "Restoring your profile…"
+      ldStep(2);
       setTimeout(() => loadProfile(), 0);
     }
   }
@@ -319,8 +289,6 @@ async function handleAuth() {
   btn.disabled = true;
   btn.textContent = isSignUp ? 'Creating…' : 'Signing in…';
 
-  // Guard: if already signed in (e.g. session restored while login screen showed),
-  // just boot directly instead of calling signInWithPassword which would hang.
   const { data: existing } = await db.auth.getSession();
   if (existing?.session?.user && !isSignUp) {
     currentUser = existing.session.user;
@@ -330,19 +298,16 @@ async function handleAuth() {
   }
 
   if (isSignUp) {
-    // ── SIGN UP ──────────────────────────────────
     const name = document.getElementById('signup-name').value.trim();
     if (!name) {
       btn.disabled = false; btn.textContent = 'Create account';
       return showAuthError('Please enter your name.');
     }
 
-    // Step 1: Create the auth user
     const { data: signUpData, error: signUpErr } = await db.auth.signUp({
       email, password,
       options: {
         data: { display_name: name },
-        // Skip email confirmation — users go straight in
         emailRedirectTo: undefined,
       },
     });
@@ -352,24 +317,18 @@ async function handleAuth() {
       return showAuthError(signUpErr.message);
     }
 
-    // Supabase may auto-confirm (if you disabled "confirm email" in dashboard)
-    // OR it may require confirmation. We handle both:
     if (signUpData.session) {
-      // Confirmed immediately — onAuthStateChange(SIGNED_IN) will fire and boot the app
       btn.textContent = 'Done!';
     } else {
-      // Email confirmation required
       btn.disabled = false; btn.textContent = 'Create account';
       showAuthError('✓ Account created! Check your email to confirm, then sign in here.');
     }
 
   } else {
-    // ── SIGN IN ──────────────────────────────────
     const { data, error } = await db.auth.signInWithPassword({ email, password });
 
     if (error) {
       btn.disabled = false; btn.textContent = 'Sign in';
-      // Friendly error messages
       if (error.message.includes('Invalid login'))
         return showAuthError('Wrong email or password. Try again.');
       if (error.message.includes('Email not confirmed'))
@@ -378,7 +337,6 @@ async function handleAuth() {
     }
 
     btn.textContent = 'Welcome back ✦';
-    // onAuthStateChange(SIGNED_IN) fires next and boots the app — no manual call needed
   }
 }
 
@@ -394,6 +352,7 @@ async function signOut() {
   _appBooted = false;
   db.removeAllChannels();
   stopPresenceHeartbeat();
+  if (_tickPollInterval) { clearInterval(_tickPollInterval); _tickPollInterval = null; }
   document.removeEventListener('visibilitychange', handleVisibility);
   document.removeEventListener('visibilitychange', handleVisibilityRead);
   try { await updatePresence('offline'); } catch(_) {}
@@ -402,28 +361,11 @@ async function signOut() {
 
 // ═══════════════════════════════════════════════
 //  PROFILE & SETUP
-//
-//  HOW THE TWO-PERSON FLOW WORKS
-//  ─────────────────────────────
-//  Person A (you) signs up → enters YOUR name + YOUR partner's name.
-//  The app creates your profile with partner_name stored.
-//  You then copy the "invite link" shown in setup → send to your babe.
-//
-//  Person B (babe) opens the invite link → it pre-fills her sign-up
-//  with your email as "partner_email" so the two profiles link up.
-//  She just picks her own name & password → done, you're connected.
-//
-//  Both profiles store each other's email so loadPartnerProfile()
-//  can find the other person without any complex join logic.
 // ═══════════════════════════════════════════════
 
 async function loadProfile() {
-  // Give the Supabase client a tick to fully initialise its fetch queue
-  // before firing a DB query. Without this, queries sent immediately after
-  // INITIAL_SESSION fire silently hang on some browsers / WebViews.
   await new Promise(r => setTimeout(r, 80));
 
-  // ── Fetch profile with timeout + retry ────────────────────────────────
   const fetchProfile = () =>
     db.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
 
@@ -440,13 +382,11 @@ async function loadProfile() {
   try {
     ({ data, error } = await withTimeout(fetchProfile(), 7000));
   } catch (e) {
-    // First attempt failed (timeout or AbortError) — wait and retry once
     ldSetMessage('Connection slow, retrying…');
     await new Promise(r => setTimeout(r, 1200));
     try {
       ({ data, error } = await withTimeout(fetchProfile(), 10000));
     } catch (e2) {
-      // Both attempts failed — show error with a manual retry option
       ldError('Could not connect. Check your internet and tap to retry.', () => {
         _appBooted = false;
         loadProfile();
@@ -466,7 +406,6 @@ async function loadProfile() {
 
   userProfile = data || null;
 
-  // New user — no profile row yet, create it
   if (!userProfile) {
     const displayName = currentUser.user_metadata?.display_name || currentUser.email.split('@')[0];
     const { error: upsertErr } = await db.from('profiles').upsert({
@@ -479,22 +418,18 @@ async function loadProfile() {
     userProfile = { id: currentUser.id, email: currentUser.email, display_name: displayName };
   }
 
-  // Setup incomplete — partner not linked yet
   if (!userProfile.partner_email) {
     prefillSetupFromInvite();
     ldDone(() => showScreen('setup-screen'));
     return;
   }
 
-  ldStep(3); // "Connecting to your space…"
+  ldStep(3);
   await loadPartnerProfile();
   showScreen('app-screen');
   await initApp();
 }
 
-// ── Setup screen helpers ──────────────────────
-
-// Check URL for ?invite=EMAIL param — babe arrives via invite link
 function prefillSetupFromInvite() {
   const params = new URLSearchParams(window.location.search);
   const inviteEmail = params.get('invite');
@@ -504,7 +439,6 @@ function prefillSetupFromInvite() {
     const nameEl  = document.getElementById('partner-name');
     if (emailEl) emailEl.value = inviteEmail;
     if (nameEl && inviteName) nameEl.value = decodeURIComponent(inviteName);
-    // Clean URL without reloading
     window.history.replaceState({}, '', window.location.pathname);
   }
 }
@@ -536,11 +470,8 @@ async function saveSetup() {
     return showToast('⚠️', error.message);
   }
 
-  // Show invite link for partner
   showInviteLink(partnerEmail, myName);
   btn.disabled = false; btn.textContent = 'Enter our space →';
-
-  // Reload profile — if partner already exists, go straight to chat
   await loadProfile();
 }
 
@@ -563,7 +494,6 @@ function copyInviteLink() {
 
 async function loadPartnerProfile() {
   if (!userProfile?.partner_email) return;
-  // maybeSingle() returns null (not 406) when the partner hasn't signed up yet
   const { data, error } = await db
     .from('profiles').select('*')
     .eq('email', userProfile.partner_email).maybeSingle();
@@ -579,7 +509,6 @@ function updatePartnerUI() {
   if (partnerProfile) {
     updatePartnerPresence(partnerProfile.presence || 'offline', partnerProfile.last_seen);
   } else {
-    // Partner hasn't joined yet — show a gentle waiting state
     const label = document.getElementById('header-status');
     if (label) { label.textContent = 'waiting for her to join…'; label.dataset.status = 'offline'; }
   }
@@ -591,30 +520,31 @@ function updatePartnerUI() {
 async function initApp() {
   updatePartnerUI();
   setupDateDivider();
-  ldStep(4); // "Loading messages…"
+  ldStep(4);
   await loadMessages();
   subscribeRealtime();
   subscribeTypingChannel();
   await updatePresence('online');
   startPresenceHeartbeat();
   requestPushPermission();
-  // Mark all undelivered messages as delivered immediately on open
   setTimeout(() => markAllDelivered(), 500);
+  setTimeout(() => markPartnerMessagesDelivered(), 500); // Add this line
+  startTickPoller();
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
-  updateActionBtn(); // ensure mic shown on fresh load
-  // Step 5: animate to 100% then fade out the loader
-  ldDone(() => {
-    // Loader has faded — app-screen is already visible, nothing else needed
-  });
+  updateActionBtn();
+  ldDone(() => {});
 }
 
 function handleVisibility() {
   updatePresence(document.hidden ? 'away' : 'online');
   if (!document.hidden) {
-    // App came to foreground — immediately mark delivered + read
-    markAllDelivered();
+    // App came to foreground
+    markAllDelivered();  // This will now only mark if partner is online
     markAllRead();
+    
+    // Also check if we need to mark any messages as delivered
+    checkAndMarkDelivered();
   }
 }
 async function handleVisibilityRead() { if (!document.hidden) await markAllRead(); }
@@ -649,8 +579,6 @@ function updatePartnerPresence(status, lastSeenISO) {
     label.textContent    = 'online now';
     label.dataset.status = 'online';
   } else {
-    // 'away' = app backgrounded; 'offline' = signed out / not connected
-    // Both show "last seen …" — we never show the word "away" to the user
     dot.className = 'presence-dot offline';
     label.dataset.status = 'offline';
     if (lastSeenISO) {
@@ -718,10 +646,8 @@ function renderMessage(msg) {
   const typing = document.getElementById('typing-indicator');
   if (area.querySelector(`[data-id="${msg.id}"]`)) return;
 
-  // Skip messages soft-deleted just for me (only I won't see them)
   if (msg.deleted_for_me && isMine) return;
 
-  // ── Centred event messages ─────────────────────────────────
   if (['heartbeat','hug','kiss','thinking'].includes(msg.type)) {
     const div = document.createElement('div');
     div.className = 'event-msg'; div.dataset.id = msg.id;
@@ -740,7 +666,6 @@ function renderMessage(msg) {
   const wrap = document.createElement('div');
   wrap.className = `bubble-wrap ${isMine ? 'mine' : 'theirs'}`; wrap.dataset.id = msg.id;
 
-  // ── Swipe-arrow indicator ──────────────────────────────────
   const arrow = document.createElement('div');
   arrow.className = 'swipe-arrow'; arrow.textContent = '↩';
   wrap.appendChild(arrow);
@@ -748,7 +673,6 @@ function renderMessage(msg) {
   const bubble  = document.createElement('div');
   const timeStr = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // ── Reply quote (if this msg is a reply) ──────────────────
   if (msg.reply_preview) {
     const quote = document.createElement('div');
     quote.className = 'reply-quote';
@@ -756,11 +680,9 @@ function renderMessage(msg) {
     bubble.appendChild(quote);
   }
 
-  // ── Deleted for all — show placeholder ──────────────────────
   if (msg.deleted_for_all) {
     bubble.className = 'bubble deleted';
     bubble.innerHTML = `<span class="deleted-icon">🚫</span>${isMine ? 'You deleted this message' : 'This message was deleted'}`;
-    // Build a minimal meta row just for the timestamp
     const deletedMeta = document.createElement('div'); deletedMeta.className = 'bubble-meta';
     const deletedTime = document.createElement('span'); deletedTime.className = 'bubble-time';
     deletedTime.textContent = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -768,23 +690,20 @@ function renderMessage(msg) {
     wrap.appendChild(bubble);
     wrap.appendChild(deletedMeta);
     area.insertBefore(wrap, typing);
-    return; // no interactions on deleted bubbles
+    return;
   }
 
-  // ── Bubble content ────────────────────────────────────────
   if (msg.type === 'affection') {
     bubble.className = 'bubble affection-bubble'; bubble.textContent = msg.content;
   } else if (msg.type === 'sticker') {
     bubble.className = 'bubble sticker-bubble'; bubble.textContent = msg.content;
   } else if (msg.type === 'image') {
-    // Single image
     bubble.className = 'bubble img-bubble';
     const img = document.createElement('img');
     img.src = msg.content; img.alt = 'image'; img.loading = 'lazy';
     img.addEventListener('click', () => openImgViewer(msg.content));
     bubble.appendChild(img);
   } else if (msg.type === 'images') {
-    // Multiple images — grid layout
     bubble.className = 'bubble multi-img-bubble';
     let urls = [];
     try { urls = JSON.parse(msg.content); } catch(_) { urls = [msg.content]; }
@@ -829,7 +748,6 @@ function renderMessage(msg) {
     }
   }
 
-  // ── Meta row ──────────────────────────────────────────────
   const meta   = document.createElement('div'); meta.className = 'bubble-meta';
   const timeEl = document.createElement('span'); timeEl.className = 'bubble-time'; timeEl.textContent = timeStr;
   meta.appendChild(timeEl);
@@ -848,28 +766,17 @@ function renderMessage(msg) {
   wrap.appendChild(bubble); wrap.appendChild(meta);
   area.insertBefore(wrap, typing);
 
-  // ── Attach interactions ───────────────────────────────────
   attachSwipeReply(wrap, msg);
   attachLongPress(wrap, msg);
 }
 
 // ══════════════════════════════════════════════════════
 //  THREE-STATE TICK SYSTEM
-//
-//  sent      → single grey checkmark (thin stroke)
-//  delivered → double grey checkmarks (staggered, like WhatsApp)
-//  read      → double gold checkmarks with a soft glow
-//
-//  Design: clean stroke-only marks — no filled circles.
-//  The circles were visually heavy; simple strokes are
-//  faster to read and universally understood.
 // ══════════════════════════════════════════════════════
 function buildTick(state) {
   if (state === true)  state = 'read';
   if (state === false) state = 'sent';
 
-  // A single checkmark path at a given x-offset and colour
-  // The check goes: bottom-left → mid-bottom → top-right
   const check = (dx, color, w = 2) =>
     `<polyline
        points="${1.5+dx},7 ${5+dx},11 ${12+dx},3"
@@ -877,21 +784,18 @@ function buildTick(state) {
        stroke-linecap="round" stroke-linejoin="round"/>`;
 
   if (state === 'sent') {
-    // Single thin check — muted grey
     return `<svg viewBox="0 0 14 14" width="14" height="14">
       ${check(0, '#666', 1.9)}
     </svg>`;
   }
 
   if (state === 'delivered') {
-    // Two overlapping checks — medium grey, second offset right+down
     return `<svg viewBox="0 0 20 14" width="20" height="14">
       ${check(0,   '#666', 1.8)}
       ${check(5.5, '#888', 1.8)}
     </svg>`;
   }
 
-  // read — two gold checks, first slightly dimmer for depth
   return `<svg viewBox="0 0 20 14" width="20" height="14">
     ${check(0,   'rgba(212,175,55,0.65)', 1.9)}
     ${check(5.5, 'var(--gold)',           2.1)}
@@ -901,26 +805,90 @@ function buildTick(state) {
 function tickState(msg) {
   if (msg.read_at)      return 'read';
   if (msg.delivered_at) return 'delivered';
-  return 'sent';
+  return 'sent';  // Default to sent (single tick)
 }
 
 async function markAllRead() {
   if (!currentUser || !partnerProfile || document.hidden) return;
   const now = new Date().toISOString();
   await db.from('messages')
-    .update({ delivered_at: now, read_at: now })
+    .update({ read_at: now })
     .eq('sender_id', partnerProfile.id)
     .is('read_at', null);
 }
 
-async function markAllDelivered() {
+// Call this when partner opens the app or comes online
+async function markPartnerMessagesDelivered() {
   if (!currentUser || !partnerProfile) return;
+  
+  // Mark all messages from partner as delivered
   const now = new Date().toISOString();
-  await db.from('messages')
+  const { data } = await db.from('messages')
     .update({ delivered_at: now })
     .eq('sender_id', partnerProfile.id)
-    .is('delivered_at', null);
+    .is('delivered_at', null)
+    .select();
+  
+  // Update UI for partner's messages
+  if (data) {
+    data.forEach(msg => {
+      const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
+      if (wrap && wrap.classList.contains('theirs')) {
+        // Update the tick for partner's messages (they see delivery status)
+        // This is optional - you might not want to show delivery status for partner's messages
+      }
+    });
+  }
 }
+
+// Update markAllDelivered to only mark as delivered when partner is online
+async function markAllDelivered() {
+  if (!currentUser || !partnerProfile) return;
+  
+  // Only mark as delivered if partner is online
+  if (partnerProfile.presence === 'online') {
+    const now = new Date().toISOString();
+    await db.from('messages')
+      .update({ delivered_at: now })
+      .eq('sender_id', partnerProfile.id)
+      .is('delivered_at', null);
+  }
+}
+
+// Add this function to check and update delivery status when partner comes online
+async function checkAndMarkDelivered() {
+  if (!currentUser || !partnerProfile) return;
+  
+  // Get all my messages that are sent but not delivered
+  const { data: undeliveredMsgs } = await db.from('messages')
+    .select('id')
+    .eq('sender_id', currentUser.id)
+    .is('delivered_at', null);
+  
+  if (undeliveredMsgs?.length) {
+    // Partner just came online - mark all as delivered
+    const now = new Date().toISOString();
+    await db.from('messages')
+      .update({ delivered_at: now })
+      .eq('sender_id', currentUser.id)
+      .is('delivered_at', null);
+    
+    // Update UI for each message
+    undeliveredMsgs.forEach(msg => {
+      updateDeliveredTickInUI(msg.id);
+    });
+  }
+}
+
+async function markMessageRead(messageId) {
+  if (!currentUser || !partnerProfile || document.hidden) return;
+  await db.from('messages')
+    .update({ read_at: new Date().toISOString() })
+    .eq('id', messageId)
+    .eq('sender_id', partnerProfile.id)
+    .is('read_at', null);
+}
+
 function updateTickInUI(msgId, state) {
   const wrap = document.querySelector(`.bubble-wrap[data-id="${msgId}"]`);
   if (!wrap) return;
@@ -929,67 +897,11 @@ function updateTickInUI(msgId, state) {
   tick.className = `read-tick ${state} tick-bump`;
   tick.innerHTML = buildTick(state);
   tick.title = state === 'read' ? 'Read' : state === 'delivered' ? 'Delivered' : 'Sent';
-  // Remove bump class after animation so it can retrigger
   setTimeout(() => tick.classList.remove('tick-bump'), 400);
 }
-// Convenience shims
+
 function updateReadTickInUI(msgId)      { updateTickInUI(msgId, 'read'); }
 function updateDeliveredTickInUI(msgId) { updateTickInUI(msgId, 'delivered'); }
-
-// ── Send message ───────────────────────────────
-async function sendMessage() {
-  // If there's a pending image, send that instead
-  if (_pendingImages.length > 0) { await sendImageMessage(); return; }
-
-  const input = document.getElementById('msg-input');
-  const content = input.value.trim();
-  if (!content || !currentUser) return;
-  input.value = ''; autoResize(input); closeEmojiPicker(); closeStickerPicker(); clearTypingFlag(); updateActionBtn();
-
-  const row = {
-    sender_id: currentUser.id,
-    type:      'text',
-    content,
-  };
-  // Attach reply metadata
-  if (_replyTarget) {
-    row.reply_to_id  = _replyTarget.id;
-    row.reply_preview = (_replyTarget.type === 'voice' ? '🎙 Voice note'
-                       : _replyTarget.type === 'image' ? '🖼 Image'
-                       : _replyTarget.type === 'sticker' ? _replyTarget.content
-                       : (_replyTarget.content || '').slice(0, 60));
-    cancelReply();
-  }
-
-  const { data, error } = await db.from('messages').insert(row).select().single();
-  if (!error && data) {
-    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
-    // Check tick state after short delay (DB trigger sets delivered_at immediately)
-    setTimeout(() => refreshAllTicks(), 1500);
-    setTimeout(() => refreshAllTicks(), 4000);
-  }
-}
-
-async function sendSpecial(type, content, extra = {}) {
-  const { data, error } = await db.from('messages')
-    .insert({ sender_id: currentUser.id, type, content, ...extra }).select().single();
-  if (!error && data) {
-    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
-    setTimeout(() => refreshAllTicks(), 1500);
-  }
-}
-
-// ── Realtime ───────────────────────────────────
-let _tickPollInterval = null;
-
-// Polling fallback — checks every 4s if any of our sent messages
-// have been delivered/read but the tick hasn't updated in the UI yet.
-// This handles the case where realtime UPDATE events are missed.
-function startTickPoller() {
-  if (_tickPollInterval) clearInterval(_tickPollInterval);
-  // Poll every 3s — catches anything realtime misses
-  _tickPollInterval = setInterval(() => refreshAllTicks(), 3000);
-}
 
 async function refreshAllTicks() {
   if (!currentUser) return;
@@ -1011,9 +923,54 @@ async function refreshAllTicks() {
   });
 }
 
+function startTickPoller() {
+  if (_tickPollInterval) clearInterval(_tickPollInterval);
+  _tickPollInterval = setInterval(() => refreshAllTicks(), 3000);
+}
+
+// ── Send message ───────────────────────────────
+async function sendMessage() {
+  if (_pendingImages.length > 0) { await sendImageMessage(); return; }
+
+  const input = document.getElementById('msg-input');
+  const content = input.value.trim();
+  if (!content || !currentUser) return;
+  input.value = ''; autoResize(input); closeEmojiPicker(); closeStickerPicker(); clearTypingFlag(); updateActionBtn();
+
+  const row = {
+    sender_id: currentUser.id,
+    type:      'text',
+    content,
+  };
+  if (_replyTarget) {
+    row.reply_to_id  = _replyTarget.id;
+    row.reply_preview = (_replyTarget.type === 'voice' ? '🎙 Voice note'
+                       : _replyTarget.type === 'image' ? '🖼 Image'
+                       : _replyTarget.type === 'sticker' ? _replyTarget.content
+                       : (_replyTarget.content || '').slice(0, 60));
+    cancelReply();
+  }
+
+  const { data, error } = await db.from('messages').insert(row).select().single();
+  if (!error && data) {
+    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
+    setTimeout(() => refreshAllTicks(), 1500);
+    setTimeout(() => refreshAllTicks(), 4000);
+  }
+}
+
+async function sendSpecial(type, content, extra = {}) {
+  const { data, error } = await db.from('messages')
+    .insert({ sender_id: currentUser.id, type, content, ...extra }).select().single();
+  if (!error && data) {
+    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
+    setTimeout(() => refreshAllTicks(), 1500);
+  }
+}
+
+// ── Realtime ───────────────────────────────────
 function subscribeRealtime() {
   if (realtimeSub) { db.removeChannel(realtimeSub); realtimeSub = null; }
-  startTickPoller(); // start polling fallback alongside realtime
   realtimeSub = db.channel('our-space-main')
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
       const msg = payload.new;
@@ -1026,32 +983,27 @@ function subscribeRealtime() {
       renderMessage(msg); scrollToBottom(); hideTypingUI();
       if (notifSound) notifSound();
       if (navigator.vibrate) navigator.vibrate(50);
-      const now = new Date().toISOString();
+      
       if (!document.hidden) {
-        db.from('messages').update({ delivered_at: now, read_at: now }).eq('id', msg.id);
+        markMessageRead(msg.id);
       } else {
-        db.from('messages').update({ delivered_at: now }).eq('id', msg.id);
         triggerNotification(msg);
       }
     })
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'messages' }, payload => {
       const u = payload.new;
+      const old = payload.old;
 
-      // Tick updates on my own sent messages
       if (u.sender_id === currentUser.id) {
-        if (u.read_at)           updateReadTickInUI(u.id);
-        else if (u.delivered_at) updateDeliveredTickInUI(u.id);
+        if (u.read_at && !old.read_at) {
+          updateReadTickInUI(u.id);
+        } else if (u.delivered_at && !old.delivered_at) {
+          updateDeliveredTickInUI(u.id);
+        }
       }
 
-      // Partner (or me) deleted for everyone → show placeholder
-      if (u.deleted_for_all) {
+      if (u.edited && u.sender_id !== currentUser.id && u.content !== old.content) {
         const wrap = document.querySelector(`.bubble-wrap[data-id="${u.id}"]`);
-        if (wrap) markBubbleDeleted(wrap, true);
-      }
-
-      // Partner edited their message → update bubble text live
-      if (u.edited && u.sender_id !== currentUser.id) {
-        const wrap   = document.querySelector(`.bubble-wrap[data-id="${u.id}"]`);
         const textSp = wrap?.querySelector('.bubble span:not(.edited-label)');
         if (textSp) {
           textSp.textContent = u.content;
@@ -1064,22 +1016,32 @@ function subscribeRealtime() {
           }
         }
       }
-    })
-    // Partner just created their account → link up automatically
-    .on('postgres_changes', { event:'INSERT', schema:'public', table:'profiles' }, async payload => {
-      const u = payload.new;
-      if (!userProfile?.partner_email) return;
-      if (u.email?.toLowerCase() !== userProfile.partner_email.toLowerCase()) return;
-      partnerProfile = u;
-      updatePartnerUI();
-      showToast('💛', (userProfile.partner_name || 'She') + ' just joined!');
+
+      if (u.email && u.email.toLowerCase() === userProfile?.partner_email?.toLowerCase()) {
+        partnerProfile = u;
+        updatePartnerUI();
+        showToast('💛', (userProfile.partner_name || 'She') + ' just joined!');
+      }
     })
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'profiles' }, payload => {
       const u = payload.new;
+      const old = payload.old;
+      
       if (!partnerProfile || u.id !== partnerProfile.id) return;
+      
+      // Check if partner just came online
+      const wasOffline = partnerProfile.presence !== 'online';
+      const isNowOnline = u.presence === 'online';
+      
       partnerProfile = u;
       updatePartnerPresence(u.presence || 'offline', u.last_seen);
-      if (u.current_mood) {
+      
+      // If partner just came online, mark my messages as delivered
+      if (wasOffline && isNowOnline) {
+        checkAndMarkDelivered();
+      }
+      
+      if (u.current_mood && u.current_mood !== old?.current_mood) {
         const pName = userProfile?.partner_name || 'Babe';
         document.getElementById('mood-who').textContent        = pName;
         document.getElementById('mood-label-text').textContent = `${u.mood_emoji||''} ${u.mood_label||u.current_mood}`;
@@ -1121,7 +1083,6 @@ async function handleTyping(el) {
   typingTimeout = setTimeout(clearTypingFlag, 2500);
 }
 
-// Toggle the right-side button between MIC and SEND
 function updateActionBtn() {
   const btn    = document.getElementById('action-btn');
   const input  = document.getElementById('msg-input');
@@ -1137,7 +1098,6 @@ function updateActionBtn() {
   }
 }
 
-// Unified action button handler
 function handleActionBtn() {
   const btn   = document.getElementById('action-btn');
   const input = document.getElementById('msg-input');
@@ -1241,50 +1201,25 @@ function playVoice(url, btn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  PUSH NOTIFICATIONS — VAPID (WhatsApp-style background push)
-//
-//  How it works:
-//  1. On app start we request notification permission + subscribe
-//     the service worker to the push server using your VAPID public key.
-//  2. The subscription (endpoint + keys) is saved to Supabase.
-//  3. When you send a message, the app calls the Edge Function
-//     "send-push" which signs + sends a Web Push to your partner's
-//     saved subscription.  This fires even when their app is closed.
-//  4. The service worker's "push" handler receives it and shows
-//     the OS notification banner — exactly like WhatsApp.
-//
-//  SETUP:  Put your VAPID public key in VAPID_PUBLIC_KEY below.
-//  See README_PUSH.md for how to generate your VAPID keys.
+//  PUSH NOTIFICATIONS — VAPID
 // ═══════════════════════════════════════════════════════════════
 
-// ── YOUR VAPID PUBLIC KEY ───────────────────────────────────────
-// Replace this with your own key.  Generate at:
-//   npx web-push generate-vapid-keys
-// Or use: https://vapidkeys.com
-// Then set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
-// as secrets in Supabase → Edge Functions → Secrets.
-const VAPID_PUBLIC_KEY = 'YOUR_VAPID_PUBLIC_KEY_HERE';
+const VAPID_PUBLIC_KEY = 'BNTTu-CxpWI1q3WLMAFH4yy42x9v0hX59kCYOjIrsibSLzquDRsKW7SPuSPwFsc5eCkdLj_heuaYr9JfrSonRDo';
 
-// ── State ───────────────────────────────────────────────────────
-let _pushSubscription = null; // current PushSubscription object
+let _pushSubscription = null;
 
-// ── Subscribe to VAPID push ─────────────────────────────────────
 async function subscribeToPush() {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
     if (Notification.permission !== 'granted') return;
 
-    // Wait for SW to be fully controlling the page
-    // This is critical — push subscribe silently fails if SW isn't active yet
     let reg = await Promise.race([
       navigator.serviceWorker.ready,
       new Promise((_, reject) => setTimeout(() => reject(new Error('SW timeout')), 8000))
     ]);
 
-    // Extra check: make sure SW is actually controlling this page
     if (!navigator.serviceWorker.controller) {
-      // Force the new SW to take control immediately
       await reg.update();
       await new Promise(r => setTimeout(r, 500));
       reg = await navigator.serviceWorker.ready;
@@ -1308,7 +1243,6 @@ async function subscribeToPush() {
   }
 }
 
-// ── Save subscription to Supabase ──────────────────────────────
 async function savePushSubscription(sub) {
   if (!currentUser || !sub) return;
   const json = sub.toJSON();
@@ -1324,25 +1258,19 @@ async function savePushSubscription(sub) {
   else console.log('✓ Push subscription saved to Supabase');
 }
 
-// ── Request permission then subscribe ──────────────────────────
 async function requestPushPermission() {
   if (!('Notification' in window)) return;
 
-  // iOS Safari requires the app to be installed as a PWA
-  // to use push notifications (iOS 16.4+).
-  // We always show the install prompt if not installed.
   checkInstallState();
 
   if (Notification.permission === 'denied') return;
 
   if (Notification.permission === 'default') {
-    // Delay so user has a moment to orient themselves
     setTimeout(async () => {
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
       const isInstalled = window.matchMedia('(display-mode: standalone)').matches
                        || window.navigator.standalone === true;
 
-      // On iOS, push only works when installed as PWA — don't ask until then
       if (isIOS && !isInstalled) return;
 
       const perm = await Notification.requestPermission();
@@ -1354,14 +1282,11 @@ async function requestPushPermission() {
     return;
   }
 
-  // Already granted — just make sure we're subscribed
   if (Notification.permission === 'granted') {
     await subscribeToPush();
   }
 }
 
-// ── Send push via Edge Function ─────────────────────────────────
-// Called after every outgoing message so partner gets a background push.
 async function sendPushToPartner(msg) {
   if (!partnerProfile?.id) return;
   if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
@@ -1382,11 +1307,12 @@ async function sendPushToPartner(msg) {
   const body = bodyMap[msg.type] || msg.content || 'New message';
 
   try {
-    await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+    const session = await db.auth.getSession();
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${(await db.auth.getSession()).data.session?.access_token}`,
+        'Authorization': `Bearer ${session.data.session?.access_token}`,
         'apikey': SUPABASE_ANON_KEY,
       },
       body: JSON.stringify({
@@ -1396,12 +1322,18 @@ async function sendPushToPartner(msg) {
         tag: 'our-space-msg',
       }),
     });
+    
+    const result = await response.json();
+    console.log('Push notification result:', result);
+    
+    if (!response.ok) {
+      console.error('Push notification failed:', result);
+    }
   } catch (e) {
-    // Push is best-effort — never block message send
+    console.error('Push notification error:', e);
   }
 }
 
-// ── In-app notification (app is open but backgrounded) ─────────
 function triggerNotification(msg) {
   if (!document.hidden) return;
   if (Notification.permission !== 'granted') return;
@@ -1428,14 +1360,12 @@ function triggerNotification(msg) {
   }
 }
 
-// ── Listen for messages from SW ─────────────────────────────────
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', e => {
     if (e.data?.type === 'NOTIFICATION_CLICK') {
       scrollToBottom(true);
     }
     if (e.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
-      // SW rotated our subscription — save the new one
       const raw = e.data.subscription;
       if (raw && currentUser) {
         db.from('push_subscriptions').upsert({
@@ -1450,7 +1380,6 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// ── VAPID key helper ────────────────────────────────────────────
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
   const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -1459,13 +1388,10 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  INSTALL PROMPT (Add to Home Screen)
-//  Shows a banner for Android (using beforeinstallprompt) and
-//  an iOS instruction sheet since iOS has no automatic prompt.
+//  INSTALL PROMPT
 // ═══════════════════════════════════════════════════════════════
-let _deferredInstallPrompt = null; // Android/Chrome deferred event
+let _deferredInstallPrompt = null;
 
-// Capture Android install prompt
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
   _deferredInstallPrompt = e;
@@ -1476,7 +1402,6 @@ window.addEventListener('appinstalled', () => {
   _deferredInstallPrompt = null;
   hideInstallBanner();
   showToast('💛', 'Our Space installed!');
-  // Re-subscribe push now that we are installed
   setTimeout(() => subscribeToPush(), 1500);
 });
 
@@ -1489,14 +1414,11 @@ function checkInstallState() {
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   if (isIOS && isSafari) {
-    // Show iOS-specific instructions
     showInstallBanner('ios');
   }
-  // Android/Chrome: install banner shown via beforeinstallprompt event
 }
 
 function showInstallBanner(type) {
-  // Don't spam — only show once per session
   if (sessionStorage.getItem('install-banner-shown')) return;
   sessionStorage.setItem('install-banner-shown', '1');
 
@@ -1537,7 +1459,7 @@ function toggleEmojiPicker() {
   const btn    = document.getElementById('emoji-tb-btn');
   const isOpen = picker.classList.toggle('show');
   btn?.classList.toggle('active', isOpen);
-  if (isOpen) closeStickerPicker(); // close sticker if open
+  if (isOpen) closeStickerPicker();
 }
 function closeEmojiPicker() {
   document.getElementById('emoji-picker').classList.remove('show');
@@ -1549,11 +1471,9 @@ function insertEmoji(emoji) {
   const txt = input.value.trim();
 
   if (!txt) {
-    // Empty input — send the emoji directly as a message
     closeEmojiPicker();
     sendEmojiMessage(emoji);
   } else {
-    // Text present — insert emoji at cursor position
     const pos = input.selectionStart;
     input.value = input.value.slice(0, pos) + emoji + input.value.slice(pos);
     input.focus();
@@ -1607,7 +1527,6 @@ function updateSettingsNotifUI() {
     sub.textContent = 'Tap to allow push notifications';
     btn.style.opacity = '1';
   }
-  // Hide on unsupported
   btn.style.display = perm === 'unsupported' ? 'none' : '';
 }
 
@@ -1646,7 +1565,6 @@ async function handleNotifSettingsBtn() {
 
 // ═══════════════════════════════════════════════════════════════
 //  FEATURE: DELETE CHAT
-//  Deletes all messages for both users — cannot be undone.
 // ═══════════════════════════════════════════════════════════════
 function openDeleteChatConfirm() {
   closeModal('settings-modal');
@@ -1659,8 +1577,6 @@ async function confirmDeleteChat() {
   const btn = document.querySelector('#delete-chat-modal .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
 
-  // Delete ALL messages (both sender_ids) — we use service_role via RLS update policy
-  // The policy allows authenticated users to update/delete messages
   const { error } = await db.from('messages').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
   if (error) {
@@ -1669,9 +1585,7 @@ async function confirmDeleteChat() {
     return;
   }
 
-  // Clear the UI immediately
   const area = document.getElementById('messages-area');
-  const typing = document.getElementById('typing-indicator');
   [...area.querySelectorAll('.bubble-wrap, .event-msg, .day-sep')].forEach(el => el.remove());
 
   showToast('🗑', 'Chat cleared for both of you');
@@ -1687,7 +1601,7 @@ function handleInstallSettingsBtn() {
   }
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
   if (isIOS) {
-    sessionStorage.removeItem('install-banner-shown'); // force show
+    sessionStorage.removeItem('install-banner-shown');
     showInstallBanner('ios');
   } else if (_deferredInstallPrompt) {
     triggerInstall();
@@ -1728,8 +1642,6 @@ function scrollToBottom(instant=false) {
   window.visualViewport.addEventListener('scroll',onVpChange);
 })();
 
-// ── Service Worker registration ────────────────────────────────
-// Wait for SW to be fully active before subscribing to push.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
@@ -1746,7 +1658,6 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Pre-fill "your name" on setup screen from auth metadata
 const _origShowScreen = showScreen;
 showScreen = function(id) {
   _origShowScreen(id);
@@ -1765,7 +1676,7 @@ showScreen = function(id) {
 // ═══════════════════════════════════════════════════════════════
 //  FEATURE: SWIPE-TO-REPLY
 // ═══════════════════════════════════════════════════════════════
-let _replyTarget = null; // { id, sender_id, content, type }
+let _replyTarget = null;
 
 function attachSwipeReply(wrap, msg) {
   let startX = 0, currentX = 0, swiping = false;
@@ -1780,7 +1691,6 @@ function attachSwipeReply(wrap, msg) {
     if (!swiping) return;
     const t = e.touches ? e.touches[0] : e;
     const dx = t.clientX - startX;
-    // Mine: swipe left (negative); Theirs: swipe right (positive)
     const dir = isMine ? -dx : dx;
     if (dir < 0) return;
     currentX = Math.min(dir, THRESHOLD + 20);
@@ -1831,7 +1741,7 @@ function cancelReply() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  FEATURE: LONG-PRESS CONTEXT MENU (reply / copy / edit / delete)
+//  FEATURE: LONG-PRESS CONTEXT MENU
 // ═══════════════════════════════════════════════════════════════
 let _ctxMsg = null;
 let _longPressTimer = null;
@@ -1842,13 +1752,11 @@ function attachLongPress(wrap, msg) {
     const menu  = document.getElementById('ctx-menu');
     const isMine = msg.sender_id === currentUser.id;
 
-    // Show/hide edit & delete only for own messages
     document.getElementById('ctx-edit').style.display   = isMine && msg.type === 'text' ? '' : 'none';
     document.getElementById('ctx-delete').style.display = isMine ? '' : 'none';
     document.getElementById('ctx-copy').style.display   = ['text','affection'].includes(msg.type) ? '' : 'none';
 
-    // Position near the tap
-    menu.style.display = 'flex'; // briefly show to get dimensions
+    menu.style.display = 'flex';
     const mw = menu.offsetWidth, mh = menu.offsetHeight;
     const vw = window.innerWidth, vh = window.innerHeight;
     let x = clientX - mw / 2, y = clientY - mh - 12;
@@ -1860,7 +1768,6 @@ function attachLongPress(wrap, msg) {
     if (navigator.vibrate) navigator.vibrate(50);
   }
 
-  // Touch long press
   wrap.addEventListener('touchstart', e => {
     const t = e.touches[0];
     _longPressTimer = setTimeout(() => show(t.clientX, t.clientY), 480);
@@ -1868,18 +1775,15 @@ function attachLongPress(wrap, msg) {
   wrap.addEventListener('touchend',   () => clearTimeout(_longPressTimer), { passive: true });
   wrap.addEventListener('touchmove',  () => clearTimeout(_longPressTimer), { passive: true });
 
-  // Desktop right-click
   wrap.addEventListener('contextmenu', e => {
     e.preventDefault();
     show(e.clientX, e.clientY);
   });
 }
 
-// ── Close context menu ──────────────────────────────────────────
 function closeCtxMenu() {
   const menu = document.getElementById('ctx-menu');
   menu.classList.remove('show');
-  // Reset position so it doesn't flash in wrong place next time
   menu.style.left = '-9999px';
 }
 document.addEventListener('click', e => {
@@ -1889,27 +1793,22 @@ document.addEventListener('touchstart', e => {
   if (!e.target.closest('#ctx-menu')) closeCtxMenu();
 }, { passive: true });
 
-// ── Context menu action handler ──────────────────────────────────
 async function ctxAction(action) {
-  // Close menu FIRST, immediately — before any async work
   closeCtxMenu();
   if (!_ctxMsg) return;
   const msg = _ctxMsg;
-  _ctxMsg = null; // clear so accidental double-tap does nothing
+  _ctxMsg = null;
 
-  // ── Reply ──────────────────────────────────────────────────────
   if (action === 'reply') {
     triggerReply(msg);
   }
 
-  // ── Copy ───────────────────────────────────────────────────────
   if (action === 'copy') {
     const text = msg.content || '';
     try {
       await navigator.clipboard.writeText(text);
       showToast('⎘', 'Copied!');
     } catch(_) {
-      // Fallback for browsers that block clipboard without user gesture
       const el = document.createElement('textarea');
       el.value = text; el.style.position = 'fixed'; el.style.opacity = '0';
       document.body.appendChild(el); el.select();
@@ -1919,13 +1818,11 @@ async function ctxAction(action) {
     }
   }
 
-  // ── Edit ───────────────────────────────────────────────────────
   if (action === 'edit') {
     const wrap   = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
     const bubble = wrap?.querySelector('.bubble');
     if (!bubble) return;
 
-    // Only edit the text node (not the edited-label span)
     const textSpan = bubble.querySelector('span:not(.edited-label)') || bubble;
     const original = textSpan.textContent.trim();
 
@@ -1933,7 +1830,6 @@ async function ctxAction(action) {
     bubble.classList.add('editing');
     textSpan.focus();
 
-    // Move cursor to end
     const range = document.createRange();
     range.selectNodeContents(textSpan); range.collapse(false);
     const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
@@ -1955,7 +1851,6 @@ async function ctxAction(action) {
     textSpan.addEventListener('blur',    finishEdit);
   }
 
-  // ── Delete → show confirmation sheet ──────────────────────────
   if (action === 'delete') {
     openDeleteConfirm(msg);
   }
@@ -1967,7 +1862,6 @@ let _deleteTarget = null;
 function openDeleteConfirm(msg) {
   _deleteTarget = msg;
 
-  // Show message preview in sheet
   const preview = msg.type === 'voice'   ? '🎙 Voice note'
                 : msg.type === 'image'   ? '🖼 Image'
                 : msg.type === 'sticker' ? msg.content
@@ -1978,12 +1872,11 @@ function openDeleteConfirm(msg) {
 }
 
 function cancelDelete(e) {
-  // Close if: no event (called directly), or click was on the dark backdrop
   if (e && e.target !== document.getElementById('delete-overlay')) return;
   _deleteTarget = null;
   document.getElementById('delete-overlay').classList.remove('show');
 }
-// Allow ESC key to dismiss
+
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     cancelDelete();
@@ -2000,8 +1893,6 @@ async function confirmDelete(scope) {
   const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
 
   if (scope === 'me') {
-    // Soft-delete: mark deleted_for_me — only this user won't see it
-    // Optimistic update in UI immediately
     if (wrap) markBubbleDeleted(wrap, false);
     const { error } = await db.from('messages')
       .update({ deleted_for_me: true })
@@ -2014,13 +1905,11 @@ async function confirmDelete(scope) {
   }
 
   if (scope === 'all') {
-    // Soft-delete for everyone: mark deleted_for_all
-    // Both bubbles update via realtime UPDATE event
     if (wrap) markBubbleDeleted(wrap, true);
     const { error } = await db.from('messages')
       .update({ deleted_for_all: true })
       .eq('id', msg.id)
-      .eq('sender_id', currentUser.id); // only sender can delete for all
+      .eq('sender_id', currentUser.id);
     if (error) {
       console.error('delete-for-all error:', error.message);
       showToast('⚠️', 'Could not delete for everyone');
@@ -2032,23 +1921,18 @@ async function confirmDelete(scope) {
   }
 }
 
-// ── Apply deleted style to a bubble ──────────────────────────────
 function markBubbleDeleted(wrap, forAll) {
   const bubble = wrap?.querySelector('.bubble');
   if (!bubble) return;
-  // Determine whose deletion label to show
   const isMine = wrap.classList.contains('mine');
   const label = (forAll && !isMine) ? 'This message was deleted'
               : (forAll &&  isMine) ? 'You deleted this message'
-              : 'You deleted this message'; // deleted_for_me
-  // Replace bubble content
+              : 'You deleted this message';
   bubble.className = 'bubble deleted';
   bubble.contentEditable = 'false';
   bubble.innerHTML = `<span class="deleted-icon">🚫</span>${label}`;
-  // Hide read-tick (not relevant on deleted message)
   const tick = wrap.querySelector('.read-tick');
   if (tick) tick.style.display = 'none';
-  // Remove swipe/longpress by replacing the node with a clone (removes all listeners)
   const fresh = wrap.cloneNode(true);
   wrap.parentNode?.replaceChild(fresh, wrap);
 }
@@ -2059,7 +1943,6 @@ async function saveEdit(id, newText, textSpanEl, wrap) {
     .eq('id', id).eq('sender_id', currentUser.id);
   if (error) { showToast('⚠️', 'Edit failed'); return; }
   textSpanEl.textContent = newText;
-  // Add / update "edited" label in meta row
   const w = wrap || textSpanEl.closest('.bubble-wrap');
   let editedEl = w?.querySelector('.edited-label');
   if (!editedEl) {
@@ -2075,8 +1958,7 @@ async function saveEdit(id, newText, textSpanEl, wrap) {
 // ═══════════════════════════════════════════════════════════════
 //  FEATURE: IMAGE SENDING
 // ═══════════════════════════════════════════════════════════════
-// ── Multi-image pending queue ────────────────────────────────────
-let _pendingImages = []; // array of { file, dataUrl }
+let _pendingImages = [];
 
 function triggerImagePick() {
   document.getElementById('img-file-input').click();
@@ -2094,7 +1976,6 @@ function onImageSelected(e) {
   });
   if (!valid.length) return;
 
-  // Cap at 9 images (like WhatsApp/Instagram)
   const remaining = 9 - _pendingImages.length;
   const toAdd = valid.slice(0, remaining);
   if (valid.length > remaining) showToast('⚠️', `Max 9 images at once`);
@@ -2160,7 +2041,6 @@ async function sendImageMessage() {
   };
 
   if (images.length === 1) {
-    // Single image — send as regular 'image' type
     const url = await uploadOne(images[0]);
     if (!url) { showToast('⚠️', 'Upload failed'); return; }
     const extra = _replyTarget
@@ -2169,7 +2049,6 @@ async function sendImageMessage() {
     cancelReply();
     await sendSpecial('image', url, extra);
   } else {
-    // Multiple images — upload all in parallel then send one message with JSON array
     const urls = await Promise.all(images.map(uploadOne));
     const failed = urls.filter(u => !u).length;
     const good   = urls.filter(Boolean);
@@ -2179,7 +2058,6 @@ async function sendImageMessage() {
       ? { reply_to_id: _replyTarget.id, reply_preview: _replyTarget.content?.slice(0,60) }
       : {};
     cancelReply();
-    // content = JSON array of URLs; type = 'images' (plural)
     await sendSpecial('images', JSON.stringify(good), extra);
   }
 }
@@ -2194,15 +2072,10 @@ function closeImgViewer() { document.getElementById('img-viewer').classList.remo
 //  FEATURE: STICKER PICKER
 // ═══════════════════════════════════════════════════════════════
 const STICKER_CATS = [
-  // 0 — Love
   ['💛','❤️','🧡','💜','💙','🖤','💚','🤍','💕','💞','💓','💗','💘','💝','💖','🫶','💋','😘','🥰','😍'],
-  // 1 — Cute faces
   ['🥺','🥹','😊','🤭','🫣','😌','😏','🥲','😂','🤣','😭','😅','😇','🤩','😜','🫠','🤗','🤔','😴','🫡'],
-  // 2 — Night & moon
   ['🌙','✨','🌟','💫','⭐','🌠','🌌','🌃','🌆','🌉','🕯','🪔','💤','😴','🌛','🌜','🌝','☁️','🌧','⛈'],
-  // 3 — Nature & romance
   ['🌸','🌷','🌹','🌺','🌻','💐','🍀','🌿','🍃','🌱','🦋','🐝','🌈','☀️','🌊','🏖','🫧','🍓','🍑','🍒'],
-  // 4 — Fun
   ['🎉','🎊','🎈','🎀','🎁','🏆','🥇','👑','💎','🔮','🪄','🎶','🎵','🎸','🎹','🎤','🎧','📸','🍕','🍔'],
 ];
 
@@ -2242,7 +2115,6 @@ async function sendSticker(emoji) {
   if (navigator.vibrate) navigator.vibrate(30);
 }
 
-// Close sticker picker on outside click
 document.addEventListener('click', e => {
   if (!e.target.closest('#sticker-picker') && !e.target.closest('#sticker-btn')) {
     closeStickerPicker();
