@@ -539,12 +539,9 @@ async function initApp() {
 function handleVisibility() {
   updatePresence(document.hidden ? 'away' : 'online');
   if (!document.hidden) {
-    // App came to foreground
-    markAllDelivered();  // This will now only mark if partner is online
+    clearUnread();      // clear badge when user opens app
+    markAllDelivered();
     markAllRead();
-    
-    // Also check if we need to mark any messages as delivered
-    checkAndMarkDelivered();
   }
 }
 async function handleVisibilityRead() { if (!document.hidden) await markAllRead(); }
@@ -623,6 +620,7 @@ async function loadMessages() {
   });
 
   scrollToBottom(true);
+  clearUnread();
   await markAllRead();
 }
 
@@ -1291,7 +1289,7 @@ async function sendPushToPartner(msg) {
   if (!partnerProfile?.id) return;
   if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'YOUR_VAPID_PUBLIC_KEY_HERE') return;
 
-  const senderName = userProfile?.display_name || 'Babe';
+  const senderName = userProfile?.display_name || userProfile?.partner_name || 'Babe';
   const bodyMap = {
     heartbeat: `${senderName} sent you a heartbeat 💓`,
     hug:       `${senderName} is hugging you 🤗`,
@@ -1308,33 +1306,67 @@ async function sendPushToPartner(msg) {
 
   try {
     const session = await db.auth.getSession();
-    const response = await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+    await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.data.session?.access_token}`,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
         'apikey': SUPABASE_ANON_KEY,
       },
       body: JSON.stringify({
         recipientId: partnerProfile.id,
-        title: 'Our Space 💛',
+        title: `Our Space 💛`,
         body,
-        tag: 'our-space-msg',
+        // Rich notification options — used by SW to show banner/badge
+        icon:    '/icon-192.png',
+        badge:   '/icon-192.png',
+        tag:     'our-space-msg',
+        renotify: true,
+        // Actions shown on Android lock screen / notification shade
+        actions: [
+          { action: 'reply',  title: '💬 Open' },
+        ],
+        // Sound hint (honoured by Android; iOS uses system setting)
+        silent: false,
+        // Pass unread count so SW can show badge number
+        data: {
+          url:         '/',
+          senderId:    currentUser.id,
+          senderName,
+          messageType: msg.type,
+          timestamp:   Date.now(),
+        },
       }),
     });
-    
-    const result = await response.json();
-    console.log('Push notification result:', result);
-    
-    if (!response.ok) {
-      console.error('Push notification failed:', result);
-    }
   } catch (e) {
-    console.error('Push notification error:', e);
+    // Push is best-effort — never block message send
   }
 }
 
+// ── Unread badge management ────────────────────────────────────
+function incrementUnread() {
+  _unreadCount++;
+  updateAppBadge(_unreadCount);
+}
+
+function clearUnread() {
+  _unreadCount = 0;
+  updateAppBadge(0);
+}
+
+// navigator.setAppBadge — shows number on app icon (Android Chrome, some iOS)
+function updateAppBadge(count) {
+  try {
+    if ('setAppBadge' in navigator) {
+      if (count > 0) navigator.setAppBadge(count);
+      else           navigator.clearAppBadge();
+    }
+  } catch (_) {}
+}
+
+// ── In-app notification (app backgrounded but not closed) ──────
 function triggerNotification(msg) {
+  incrementUnread(); // bump badge regardless
   if (!document.hidden) return;
   if (Notification.permission !== 'granted') return;
   const senderName = userProfile?.partner_name || 'Babe';
@@ -1345,18 +1377,32 @@ function triggerNotification(msg) {
     thinking:  `${senderName} is thinking of you 🌸`,
     affection: msg.content,
     voice:     `${senderName} sent a voice note 🎙`,
+    image:     `${senderName} sent a photo 🖼`,
+    sticker:   `${senderName} sent a sticker ${msg.content}`,
     text:      msg.content,
   };
   const body = bodyMap[msg.type] || msg.content;
   const opts = {
-    body, icon: 'icon-192.png', badge: 'icon-192.png',
-    tag: 'our-space-msg', renotify: true,
-    data: { url: window.location.href },
+    body,
+    icon:     '/icon-192.png',
+    badge:    '/icon-192.png',   // small monochrome icon on Android status bar
+    tag:      'our-space-msg',   // replaces previous notification (no stacking)
+    renotify: true,              // vibrate/sound again even if same tag
+    silent:   false,             // play notification sound
+    vibrate:  [100, 50, 100],
+    data: {
+      url:         window.location.href,
+      unreadCount: _unreadCount,
+    },
   };
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage({ type: 'SHOW_NOTIFICATION', title: 'Our Space 💛', ...opts });
+    navigator.serviceWorker.controller.postMessage({
+      type: 'SHOW_NOTIFICATION',
+      title: `Our Space 💛${_unreadCount > 1 ? ` (${_unreadCount})` : ''}`,
+      ...opts,
+    });
   } else {
-    try { new Notification('Our Space 💛', opts); } catch (e) {}
+    try { new Notification(`Our Space 💛`, opts); } catch (e) {}
   }
 }
 
