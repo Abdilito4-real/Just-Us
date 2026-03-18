@@ -53,6 +53,8 @@ let notifSound       = null;
 let currentAudio     = null;
 let _appBooted       = false;
 let _tickPollInterval = null;
+let _unreadCount     = 0;     // unread message badge counter
+let _lastReadTimestamp = null; // Track last time we marked messages as read
 
 // ═══════════════════════════════════════════════════════════════
 //  LOADER ENGINE — step-by-step progress feedback
@@ -527,8 +529,10 @@ async function initApp() {
   await updatePresence('online');
   startPresenceHeartbeat();
   requestPushPermission();
-  setTimeout(() => markAllDelivered(), 500);
-  setTimeout(() => markPartnerMessagesDelivered(), 500); // Add this line
+  
+  // WhatsApp-style delivery: mark as delivered automatically when message is received
+  // This happens via database trigger now, not manually
+  
   startTickPoller();
   document.addEventListener('visibilitychange', handleVisibility);
   document.addEventListener('visibilitychange', handleVisibilityRead);
@@ -539,12 +543,24 @@ async function initApp() {
 function handleVisibility() {
   updatePresence(document.hidden ? 'away' : 'online');
   if (!document.hidden) {
-    clearUnread();      // clear badge when user opens app
-    markAllDelivered();
+    // App came to foreground — mark all as read (WhatsApp behavior)
     markAllRead();
+    clearUnread();
+    // Also dismiss any pending notifications
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.getNotifications({ tag: 'our-space-msg' }).then(notifs => {
+          notifs.forEach(n => n.close());
+        });
+      });
+    }
   }
 }
-async function handleVisibilityRead() { if (!document.hidden) await markAllRead(); }
+async function handleVisibilityRead() { 
+  if (!document.hidden) {
+    await markAllRead(); 
+  }
+}
 
 function setupDateDivider() {
   const opts = { weekday: 'long', month: 'long', day: 'numeric' };
@@ -803,85 +819,54 @@ function buildTick(state) {
 function tickState(msg) {
   if (msg.read_at)      return 'read';
   if (msg.delivered_at) return 'delivered';
-  return 'sent';  // Default to sent (single tick)
+  return 'sent';
 }
 
+// WhatsApp-style: mark as read only when user opens the chat
 async function markAllRead() {
-  if (!currentUser || !partnerProfile || document.hidden) return;
+  if (!currentUser || !partnerProfile) return;
+  
+  // Only mark as read if we're actually viewing the chat
+  // (In WhatsApp, opening the chat marks everything as read)
   const now = new Date().toISOString();
-  await db.from('messages')
+  
+  // Update database
+  const { data } = await db.from('messages')
     .update({ read_at: now })
     .eq('sender_id', partnerProfile.id)
-    .is('read_at', null);
-}
-
-// Call this when partner opens the app or comes online
-async function markPartnerMessagesDelivered() {
-  if (!currentUser || !partnerProfile) return;
-  
-  // Mark all messages from partner as delivered
-  const now = new Date().toISOString();
-  const { data } = await db.from('messages')
-    .update({ delivered_at: now })
-    .eq('sender_id', partnerProfile.id)
-    .is('delivered_at', null)
+    .is('read_at', null)
     .select();
   
-  // Update UI for partner's messages
+  // Update UI for each message that was marked as read
   if (data) {
     data.forEach(msg => {
-      const wrap = document.querySelector(`.bubble-wrap[data-id="${msg.id}"]`);
-      if (wrap && wrap.classList.contains('theirs')) {
-        // Update the tick for partner's messages (they see delivery status)
-        // This is optional - you might not want to show delivery status for partner's messages
-      }
+      updateReadTickInUI(msg.id);
     });
   }
+  
+  // Clear badge immediately when reading
+  clearUnread();
 }
 
-// Update markAllDelivered to only mark as delivered when partner is online
-async function markAllDelivered() {
+// WhatsApp-style: mark as delivered automatically when message is received
+// This should be handled by a database trigger, but we'll also update UI
+async function markMessageDelivered(messageId) {
   if (!currentUser || !partnerProfile) return;
   
-  // Only mark as delivered if partner is online
-  if (partnerProfile.presence === 'online') {
-    const now = new Date().toISOString();
-    await db.from('messages')
-      .update({ delivered_at: now })
-      .eq('sender_id', partnerProfile.id)
-      .is('delivered_at', null);
-  }
-}
-
-// Add this function to check and update delivery status when partner comes online
-async function checkAndMarkDelivered() {
-  if (!currentUser || !partnerProfile) return;
-  
-  // Get all my messages that are sent but not delivered
-  const { data: undeliveredMsgs } = await db.from('messages')
-    .select('id')
-    .eq('sender_id', currentUser.id)
+  const now = new Date().toISOString();
+  await db.from('messages')
+    .update({ delivered_at: now })
+    .eq('id', messageId)
+    .eq('sender_id', partnerProfile.id)
     .is('delivered_at', null);
-  
-  if (undeliveredMsgs?.length) {
-    // Partner just came online - mark all as delivered
-    const now = new Date().toISOString();
-    await db.from('messages')
-      .update({ delivered_at: now })
-      .eq('sender_id', currentUser.id)
-      .is('delivered_at', null);
-    
-    // Update UI for each message
-    undeliveredMsgs.forEach(msg => {
-      updateDeliveredTickInUI(msg.id);
-    });
-  }
 }
 
 async function markMessageRead(messageId) {
   if (!currentUser || !partnerProfile || document.hidden) return;
+  
+  const now = new Date().toISOString();
   await db.from('messages')
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: now })
     .eq('id', messageId)
     .eq('sender_id', partnerProfile.id)
     .is('read_at', null);
@@ -951,7 +936,8 @@ async function sendMessage() {
 
   const { data, error } = await db.from('messages').insert(row).select().single();
   if (!error && data) {
-    renderMessage(data); scrollToBottom(); sendPushToPartner(data);
+    renderMessage(data); scrollToBottom(); 
+    sendPushToPartner(data);
     setTimeout(() => refreshAllTicks(), 1500);
     setTimeout(() => refreshAllTicks(), 4000);
   }
@@ -973,19 +959,26 @@ function subscribeRealtime() {
     .on('postgres_changes', { event:'INSERT', schema:'public', table:'messages' }, payload => {
       const msg = payload.new;
       if (msg.sender_id === currentUser.id) return;
+      
       const area = document.getElementById('messages-area');
       const seps = area.querySelectorAll('.day-sep');
       const lastSep = seps[seps.length-1];
       const msgDate = new Date(msg.created_at).toDateString();
       if (!lastSep || lastSep.dataset.date !== msgDate) insertDaySeparator(msg.created_at);
-      renderMessage(msg); scrollToBottom(); hideTypingUI();
-      if (notifSound) notifSound();
-      if (navigator.vibrate) navigator.vibrate(50);
       
+      renderMessage(msg); 
+      scrollToBottom(); 
+      hideTypingUI();
+      
+      // WhatsApp-style notification logic
+      triggerNotification(msg);
+      
+      // Auto-mark as delivered (WhatsApp does this when device receives message)
+      markMessageDelivered(msg.id);
+      
+      // If app is visible and focused, mark as read immediately
       if (!document.hidden) {
         markMessageRead(msg.id);
-      } else {
-        triggerNotification(msg);
       }
     })
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'messages' }, payload => {
@@ -1027,17 +1020,8 @@ function subscribeRealtime() {
       
       if (!partnerProfile || u.id !== partnerProfile.id) return;
       
-      // Check if partner just came online
-      const wasOffline = partnerProfile.presence !== 'online';
-      const isNowOnline = u.presence === 'online';
-      
       partnerProfile = u;
       updatePartnerPresence(u.presence || 'offline', u.last_seen);
-      
-      // If partner just came online, mark my messages as delivered
-      if (wasOffline && isNowOnline) {
-        checkAndMarkDelivered();
-      }
       
       if (u.current_mood && u.current_mood !== old?.current_mood) {
         const pName = userProfile?.partner_name || 'Babe';
@@ -1317,23 +1301,21 @@ async function sendPushToPartner(msg) {
         recipientId: partnerProfile.id,
         title: `Our Space 💛`,
         body,
-        // Rich notification options — used by SW to show banner/badge
         icon:    '/icon-192.png',
         badge:   '/icon-192.png',
         tag:     'our-space-msg',
         renotify: true,
-        // Actions shown on Android lock screen / notification shade
         actions: [
-          { action: 'reply',  title: '💬 Open' },
+          { action: 'reply',  title: '💬 Reply' },
+          { action: 'open',   title: 'Open' },
         ],
-        // Sound hint (honoured by Android; iOS uses system setting)
         silent: false,
-        // Pass unread count so SW can show badge number
         data: {
           url:         '/',
           senderId:    currentUser.id,
           senderName,
           messageType: msg.type,
+          messageId:   msg.id,
           timestamp:   Date.now(),
         },
       }),
@@ -1343,18 +1325,23 @@ async function sendPushToPartner(msg) {
   }
 }
 
-// ── Unread badge management ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  WHATSAPP-STYLE NOTIFICATION SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+// ── Badge counter ───────────────────────────────────────────────
 function incrementUnread() {
   _unreadCount++;
   updateAppBadge(_unreadCount);
+  updatePageTitle(_unreadCount);
 }
 
 function clearUnread() {
   _unreadCount = 0;
   updateAppBadge(0);
+  updatePageTitle(0);
 }
 
-// navigator.setAppBadge — shows number on app icon (Android Chrome, some iOS)
 function updateAppBadge(count) {
   try {
     if ('setAppBadge' in navigator) {
@@ -1364,52 +1351,92 @@ function updateAppBadge(count) {
   } catch (_) {}
 }
 
-// ── In-app notification (app backgrounded but not closed) ──────
+function updatePageTitle(count) {
+  document.title = count > 0 ? `(${count}) Our Space` : 'Our Space';
+}
+
+// WhatsApp-style notification trigger
 function triggerNotification(msg) {
-  incrementUnread(); // bump badge regardless
-  if (!document.hidden) return;
+  // Always increment badge
+  incrementUnread();
+
+  // WhatsApp behavior:
+  // - App OPEN & focused in this chat → no OS notification, just in-app sound
+  // - App OPEN but backgrounded → OS notification
+  // - App closed/killed → OS notification via VAPID push
+  
+  // Check if we're actively viewing the chat
+  const isInChat = !document.hidden; // User is in the app
+  
+  if (isInChat) {
+    // Just play in-app sound, no OS notification (like WhatsApp)
+    if (notifSound) notifSound();
+    if (navigator.vibrate) navigator.vibrate(50);
+    return;
+  }
+
+  // App is backgrounded or closed - show OS notification
   if (Notification.permission !== 'granted') return;
+
   const senderName = userProfile?.partner_name || 'Babe';
+  
   const bodyMap = {
-    heartbeat: `${senderName} sent you a heartbeat 💓`,
-    hug:       `${senderName} is hugging you 🤗`,
-    kiss:      `${senderName} blew you a kiss 💋`,
-    thinking:  `${senderName} is thinking of you 🌸`,
+    heartbeat: `💓 ${senderName} sent you a heartbeat`,
+    hug:       `🤗 ${senderName} hugged you`,
+    kiss:      `💋 ${senderName} blew you a kiss`,
+    thinking:  `🌸 ${senderName} is thinking of you`,
     affection: msg.content,
-    voice:     `${senderName} sent a voice note 🎙`,
-    image:     `${senderName} sent a photo 🖼`,
-    sticker:   `${senderName} sent a sticker ${msg.content}`,
+    voice:     `🎙 Voice message from ${senderName}`,
+    image:     `🖼 Photo from ${senderName}`,
+    images:    `🖼 ${msg.content ? JSON.parse(msg.content).length : ''} photos from ${senderName}`,
+    sticker:   `${senderName} sent a sticker`,
     text:      msg.content,
   };
-  const body = bodyMap[msg.type] || msg.content;
-  const opts = {
+  const body = bodyMap[msg.type] || msg.content || 'New message';
+
+  const title = _unreadCount > 1
+    ? `Our Space (${_unreadCount}) 💛`
+    : `Our Space 💛`;
+
+  const notifOpts = {
     body,
-    icon:     '/icon-192.png',
-    badge:    '/icon-192.png',   // small monochrome icon on Android status bar
-    tag:      'our-space-msg',   // replaces previous notification (no stacking)
-    renotify: true,              // vibrate/sound again even if same tag
-    silent:   false,             // play notification sound
-    vibrate:  [100, 50, 100],
+    icon:  '/icon-192.png',
+    badge: '/icon-192.png',
+    tag:   'our-space-msg',
+    renotify: true,
+    silent: false,
+    vibrate: [100, 50, 200],
+    requireInteraction: false,
     data: {
-      url:         window.location.href,
+      url:         '/',
       unreadCount: _unreadCount,
+      senderId:    msg.sender_id,
+      messageId:   msg.id,
+      timestamp:   Date.now(),
     },
+    actions: [
+      { action: 'reply', title: '💬 Reply' },
+      { action: 'open',  title: 'Open' },
+    ],
   };
+
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     navigator.serviceWorker.controller.postMessage({
-      type: 'SHOW_NOTIFICATION',
-      title: `Our Space 💛${_unreadCount > 1 ? ` (${_unreadCount})` : ''}`,
-      ...opts,
+      type:  'SHOW_NOTIFICATION',
+      title,
+      ...notifOpts,
     });
   } else {
-    try { new Notification(`Our Space 💛`, opts); } catch (e) {}
+    try { new Notification(title, notifOpts); } catch (_) {}
   }
 }
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', e => {
     if (e.data?.type === 'NOTIFICATION_CLICK') {
+      clearUnread();        // clear badge + title when notification tapped
       scrollToBottom(true);
+      markAllRead();        // Mark all as read when opening from notification
     }
     if (e.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
       const raw = e.data.subscription;
